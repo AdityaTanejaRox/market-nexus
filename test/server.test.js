@@ -73,10 +73,9 @@ test("authenticated ingestion, replay, idempotency and restart recovery", async 
     socket.close();
     for (const frame of frames.slice(2))
       assert.equal((await post(running.url, frame)).status, 200);
-    assert.equal(
-      (await post(running.url, { ...frames[4], seq: 100, time: 1 })).status,
-      409,
-    );
+    const outOfOrder = structuredClone(frames[1]);
+    outOfOrder.seq = 100;
+    assert.equal((await post(running.url, outOfOrder)).status, 409);
     const page = await (
       await fetch(
         running.url + "/api/sessions/test-session/frames?at=2.5&limit=2",
@@ -85,6 +84,14 @@ test("authenticated ingestion, replay, idempotency and restart recovery", async 
     assert.deepEqual(
       page.frames.map((f) => f.time),
       [2, 3],
+    );
+    const summary = await (
+      await fetch(running.url + "/api/sessions/test-session/summary")
+    ).json();
+    assert.equal(summary.time, 4);
+    assert.equal(
+      summary.pnl,
+      frames[4].strategies.reduce((n, s) => n + s.pnl, 0),
     );
     const marks = await (
       await fetch(running.url + "/api/sessions/test-session/bookmarks")

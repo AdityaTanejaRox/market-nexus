@@ -1,4 +1,7 @@
 import "./style.css";
+import { EXCHANGES, exchangeOf, exchangeTotals } from "./exchanges.js";
+import { createWindows } from "./windows.js";
+import { eventText, priceSeries, snapshotCards } from "./presentation.js";
 import {
   entityHealth,
   bookmarks,
@@ -44,6 +47,9 @@ let ws = null,
   loadGeneration = 0,
   lastReceived = 0,
   loading = false;
+const windows = createWindows($("detail-windows"));
+let historyCards = [],
+  selectedPopup = null;
 let city,
   connected = false,
   activeOrder = null,
@@ -65,6 +71,9 @@ try {
     cinematic() {},
     tour() {},
     health() {},
+    data() {},
+    histories() {},
+    interior() {},
     followOrder() {},
     stopFollow() {},
   };
@@ -94,9 +103,70 @@ function refreshHealth() {
   return map;
 }
 function select(id) {
+  if (id.startsWith("city-")) {
+    city.focus(id);
+    const venue = exchangeTotals(displayed.strategies).find(
+      (e) => e.id === id.slice(5),
+    );
+    if (venue) windows.open(id, venue.id + " CITY", cityHtml(venue));
+    return;
+  }
+  if (id.startsWith("pnl-bridge-")) {
+    const key = id.slice(11);
+    city.focus(key);
+    openPnlWindow(key);
+    return;
+  }
+
+  if (id === "pnl-bridge") {
+    openPnlWindow();
+    return;
+  }
+  if (id.startsWith("event-")) {
+    const event = log.find((e) => e.id === id.slice(6));
+    if (event) {
+      if (event.orderId) followOrder(event.orderId);
+      else
+        windows.open(
+          id,
+          event.type.replaceAll("_", " "),
+          kv("Time", event.time.toFixed(6) + "s") +
+            `<p>${esc(eventText(event))}</p>`,
+        );
+    }
+    return;
+  }
+  if (id.startsWith("vehicle-")) {
+    windows.open(
+      id,
+      "HOVERCAR / " + id,
+      `<p>Decorative orbital traffic. This vehicle represents no trade or position.</p>${kv("Lane", Number(id.split("-")[1]) + 1)}${kv("Motion", "Autonomous cinematic path")}`,
+    );
+    return;
+  }
+  if (id.startsWith("history-")) {
+    const card = historyCards[Number(id.split("-")[1])];
+    if (card) openHistory(card);
+    return;
+  }
+  if (id === "workstation" || id.startsWith("workstation-")) {
+    const key = id === "workstation" ? selected : id.slice(12);
+    selectedPopup = displayed.strategies.some((s) => s.id === key)
+      ? key
+      : displayed.strategies[0].id;
+    city.interior(selectedPopup);
+    openStrategyWindow(selectedPopup, "workstation");
+    return;
+  }
+  if (id.startsWith("chart-") || id.startsWith("scanner-")) {
+    const key = id.slice(id.indexOf("-") + 1);
+    openStrategyWindow(key, id.startsWith("chart-") ? "chart" : "scanner");
+    return;
+  }
   selected = id;
   city.focus(id);
   inspect();
+  openEntityWindow(id);
 }
 function inspect() {
   const s = displayed.strategies.find((x) => x.id === selected),
@@ -161,6 +231,15 @@ function draw(frame, events = []) {
   $("scene-source").textContent =
     `${(frame.source || "imported").toUpperCase()} / ${mode.toUpperCase()}`;
   city.update(frame, healthMap());
+  city.data(
+    frame,
+    [...log].reverse(),
+    frames.filter((f) => f.time <= frame.time).slice(-240),
+  );
+  syncVenueControls();
+  renderMonitors();
+  refreshContextWindows();
+  renderTicker(frame);
   refreshHealth();
   events.forEach((e) => city.emit(e));
   $("metrics").innerHTML = [
@@ -269,6 +348,23 @@ async function refresh() {
         .join("");
     $("sessions").value = old;
     $("sessions").sessionData = data.sessions;
+    if (remote) {
+      const summaries = await Promise.all(
+        data.sessions
+          .slice(0, 12)
+          .map((s) => api(`/api/sessions/${encodeURIComponent(s.id)}/summary`)),
+      );
+      setHistory(
+        summaries.map((s) => ({
+          id: s.id,
+          label: s.created.slice(0, 10),
+          title: s.label,
+          pnl: s.pnl,
+          source: s.source,
+          remote: true,
+        })),
+      );
+    }
   } catch (e) {
     $("notice").textContent =
       "Telemetry server unavailable. Local demo and file replay remain available.";
@@ -328,6 +424,7 @@ function loadLocal(s) {
   $("connection").textContent =
     frames[0].source === "demo" ? "LOCAL DEMO" : "IMPORTED REPLAY";
   seek(frames[0].time);
+  setHistory(snapshotCards(local.frames));
   loadBookmarks();
 }
 async function openRecording() {
@@ -348,6 +445,7 @@ async function openRecording() {
   $("connection").textContent = "STORED RECORDING";
   stopOrder();
   await seek(item.start_time);
+  refresh();
   loadBookmarks();
 }
 function watch() {
@@ -445,6 +543,444 @@ function watch() {
   connect();
   loadBookmarks();
 }
+function openEntityWindow(id) {
+  const s = displayed.strategies.find((s) => s.id === id),
+    f = displayed.feeds.find((f) => f.id === id);
+  if (s) openStrategyWindow(id, "strategy");
+  else if (f) {
+    windows.open(
+      "feed-" + id,
+      "FEED " + id,
+      kv("Health", healthMap()[id].state) +
+        kv("Sequence", f.seq) +
+        kv("Gaps", f.gaps),
+    );
+  } else
+    windows.open(
+      id,
+      id.toUpperCase(),
+      "<p>Read-only infrastructure component.</p>" +
+        kv("Capture source", displayed.source || "imported") +
+        kv("Snapshot", displayed.time.toFixed(3) + "s"),
+    );
+}
+function strategyHtml(id, kind) {
+  const s = displayed.strategies.find((s) => s.id === id);
+  if (!s) return "<p>Strategy unavailable.</p>";
+  const signal = s.signal,
+    series = priceSeries(s, log),
+    latestOrder = log.find((e) => e.strategyId === id && e.orderId);
+  return (
+    `<h3>${esc(s.name)} / ${esc(s.symbol)}</h3>` +
+    kv("Source", displayed.source || "imported") +
+    kv("Exchange city", exchangeOf(s)) +
+    kv("Health", healthMap()[id].state) +
+    kv("P&L", money(s.pnl)) +
+    kv("Position", s.position) +
+    kv("Orders", s.orders) +
+    kv("Fills", s.fills) +
+    kv("Latency (ns)", s.latency) +
+    kv("Snapshot (s)", displayed.time.toFixed(3)) +
+    kv("Producer state", s.state) +
+    kv("Latest price", s.market?.price ?? "Not supplied") +
+    (kind === "scanner" || kind === "workstation" || kind === "strategy"
+      ? signal
+        ? kv("Setup", signal.label) +
+          kv("Direction", signal.direction) +
+          kv("Charge", signal.charge.toFixed(0) + "%") +
+          kv("Status", signal.status)
+        : "<p>Signal telemetry not supplied.</p>"
+      : "") +
+    (kind === "chart" || kind === "workstation" || kind === "strategy"
+      ? kv("Chart data", series.label) +
+        kv("Latest price", series.price ?? "Not supplied") +
+        '<canvas class="window-chart" width="480" height="170" data-chart="' +
+        id +
+        '"></canvas>'
+      : "") +
+    `<button data-pnl-strategy="${id}">Strategy P&L bridge</button><button data-interior="${id}">Enter workstation</button>` +
+    `<button data-scanner="${id}">Signal scanner</button>` +
+    (latestOrder
+      ? '<button data-follow="' +
+        esc(latestOrder.orderId) +
+        '">Follow this order</button>'
+      : "") +
+    "<h4>Observed activity</h4>" +
+    log
+      .filter((e) => e.strategyId === id)
+      .slice(0, 8)
+      .map(
+        (e) =>
+          `<p class="muted">${e.time.toFixed(3)}s · ${esc(eventText(e))}</p>`,
+      )
+      .join("")
+  );
+}
+function openStrategyWindow(id, kind) {
+  const body = windows.open(
+    kind + "-" + id,
+    kind.toUpperCase() + " / " + id.toUpperCase(),
+    strategyHtml(id, kind),
+  );
+  paintWindowCharts(body);
+}
+function paintWindowCharts(host) {
+  for (const canvas of host.querySelectorAll("[data-chart]")) {
+    const s = displayed.strategies.find((s) => s.id === canvas.dataset.chart);
+    if (!s) continue;
+    const bars = priceSeries(s, log).bars;
+    const x = canvas.getContext("2d");
+    x.clearRect(0, 0, 480, 170);
+    if (!bars.length) continue;
+    const low = Math.min(...bars.map((b) => b.low)),
+      high = Math.max(...bars.map((b) => b.high)),
+      span = high - low || 1;
+    bars.forEach((b, i) => {
+      const px = 12 + (i / (bars.length - 1 || 1)) * 455,
+        y = (v) => 15 + (1 - (v - low) / span) * 135;
+      x.strokeStyle = b.close >= b.open ? "#65f4d8" : "#ff6bad";
+      x.fillStyle = x.strokeStyle;
+      x.beginPath();
+      x.moveTo(px, y(b.high));
+      x.lineTo(px, y(b.low));
+      x.stroke();
+      x.fillRect(
+        px - 2,
+        Math.min(y(b.open), y(b.close)),
+        4,
+        Math.max(2, Math.abs(y(b.open) - y(b.close))),
+      );
+    });
+  }
+}
+function refreshContextWindows() {
+  for (const s of displayed.strategies)
+    for (const kind of ["strategy", "chart", "scanner", "workstation"]) {
+      const key = kind + "-" + s.id;
+      if (windows.has(key)) windows.update(key, strategyHtml(s.id, kind));
+    }
+  for (const f of displayed.feeds)
+    if (windows.has("feed-" + f.id))
+      windows.update(
+        "feed-" + f.id,
+        kv("Health", healthMap()[f.id].state) +
+          kv("Sequence", f.seq) +
+          kv("Gaps", f.gaps),
+      );
+  paintWindowCharts($("detail-windows"));
+  if (windows.has("pnl-bridge")) windows.update("pnl-bridge", pnlWindowHtml());
+  for (const s of displayed.strategies)
+    if (windows.has("pnl-bridge-" + s.id))
+      windows.update("pnl-bridge-" + s.id, pnlWindowHtml(s.id));
+  for (const e of exchangeTotals(displayed.strategies))
+    if (windows.has("city-" + e.id))
+      windows.update("city-" + e.id, cityHtml(e));
+  paintPnlWindows();
+  windows.syncPopouts();
+}
+function windowsHost() {
+  return $("detail-windows");
+}
+function displayStrategy() {
+  return $("display-strategy").value || "mm";
+}
+function paintPnl(canvas, strategyId = null) {
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d"),
+    w = canvas.width,
+    h = canvas.height;
+  const samples = frames
+    .filter(
+      (f) =>
+        f.time <= displayed.time &&
+        (!strategyId || f.strategies.some((s) => s.id === strategyId)),
+    )
+    .slice(-240);
+  const values = samples.map((f) =>
+    strategyId
+      ? f.strategies.find((s) => s.id === strategyId).pnl
+      : f.strategies.reduce((n, s) => n + s.pnl, 0),
+  );
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#09172b";
+  ctx.fillRect(0, 0, w, h);
+  const low = Math.min(0, ...values),
+    high = Math.max(0, ...values),
+    span = high - low || 1;
+  ctx.strokeStyle = "#243e53";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(8, 25 + (i * (h - 40)) / 3);
+    ctx.lineTo(w - 8, 25 + (i * (h - 40)) / 3);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = "#71ffdc";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  values.forEach((v, i) => {
+    const x = 10 + (i * (w - 20)) / (values.length - 1 || 1),
+      y = 28 + (1 - (v - low) / span) * (h - 45);
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  });
+  ctx.stroke();
+  ctx.fillStyle = "#bcf8e5";
+  ctx.font = "14px monospace";
+  ctx.fillText(
+    (strategyId ? strategyId.toUpperCase() + " " : "TOTAL ") +
+      money(values.at(-1) || 0) +
+      " · " +
+      samples.length +
+      " source snapshots",
+    10,
+    17,
+  );
+}
+function pnlWindowHtml(strategyId = null) {
+  const strategy = displayed.strategies.find((s) => s.id === strategyId);
+  return (
+    kv("Source", displayed.source || "imported") +
+    kv(
+      "Scope",
+      strategy
+        ? exchangeOf(strategy) + " / " + strategy.name
+        : "Market Nexus state total",
+    ) +
+    kv(
+      "Recorded P&L",
+      money(
+        strategy
+          ? strategy.pnl
+          : displayed.strategies.reduce((n, s) => n + s.pnl, 0),
+      ),
+    ) +
+    kv("Snapshot", displayed.time.toFixed(3) + "s") +
+    '<canvas width="480" height="200" class="window-chart" data-pnl="' +
+    (strategyId || "total") +
+    '"></canvas><p class="muted">This physical bridge plots only this scope’s observed P&L snapshots, up to 240 loaded frames.</p>' +
+    (strategy
+      ? kv("Position", strategy.position) +
+        kv("Orders", strategy.orders) +
+        kv("Fills", strategy.fills)
+      : displayed.strategies
+          .map((s) => kv(exchangeOf(s) + " / " + s.name, money(s.pnl)))
+          .join(""))
+  );
+}
+function paintPnlWindows() {
+  for (const c of windowsHost().querySelectorAll("[data-pnl]"))
+    paintPnl(c, c.dataset.pnl === "total" ? null : c.dataset.pnl);
+}
+function openPnlWindow(strategyId = null) {
+  const id = strategyId ? "pnl-bridge-" + strategyId : "pnl-bridge";
+  windows.open(
+    id,
+    strategyId ? "STRATEGY P&L BRIDGE / " + strategyId : "STATE P&L BRIDGE",
+    pnlWindowHtml(strategyId),
+  );
+  paintPnlWindows();
+}
+function cityHtml(venue) {
+  return (
+    kv("Exchange", venue.id) +
+    kv("Strategy towers", venue.strategies.length) +
+    kv("Observed city P&L", money(venue.pnl)) +
+    venue.strategies
+      .map(
+        (s) =>
+          "<h3>" +
+          esc(s.name) +
+          " / " +
+          esc(s.symbol) +
+          "</h3>" +
+          kv("P&L", money(s.pnl)) +
+          '<button data-pnl-strategy="' +
+          s.id +
+          '">Inspect P&L bridge</button><button data-details="' +
+          s.id +
+          '">Tower details</button>',
+      )
+      .join("")
+  );
+}
+let venueSignature = "",
+  previousStrategyIds = new Set();
+function syncVenueControls() {
+  const signature = displayed.strategies
+    .map((s) => s.id + ":" + exchangeOf(s) + ":" + s.name)
+    .join("|");
+  if (signature === venueSignature) return;
+  venueSignature = signature;
+  const active = new Set(displayed.strategies.map((s) => s.id));
+  for (const id of previousStrategyIds)
+    if (!active.has(id))
+      for (const kind of [
+        "strategy",
+        "chart",
+        "scanner",
+        "workstation",
+        "pnl-bridge",
+      ])
+        windows.close(kind + "-" + id);
+  previousStrategyIds = active;
+  if (!active.has(selected) && !displayed.feeds.some((f) => f.id === selected))
+    selected = displayed.strategies[0].id;
+  const old = displayStrategy();
+  $("display-strategy").innerHTML = exchangeTotals(displayed.strategies)
+    .filter((e) => e.strategies.length)
+    .map(
+      (e) =>
+        '<optgroup label="' +
+        e.id +
+        ' CITY">' +
+        e.strategies
+          .map(
+            (s) => '<option value="' + s.id + '">' + esc(s.name) + "</option>",
+          )
+          .join("") +
+        "</optgroup>",
+    )
+    .join("");
+  if (displayed.strategies.some((s) => s.id === old))
+    $("display-strategy").value = old;
+}
+function renderMonitors() {
+  const id = displayStrategy(),
+    s =
+      displayed.strategies.find((s) => s.id === id) || displayed.strategies[0];
+  $("monitor-title").textContent = exchangeOf(s) + " / " + s.symbol + " PRICE";
+  $("visible-price-chart").dataset.chart = s.id;
+  $("monitor-price-label").textContent =
+    priceSeries(s, log).label +
+    " · " +
+    (s.market?.price ?? "price unavailable");
+  paintWindowCharts($("monitor-dock"));
+  paintPnl($("visible-pnl-chart"), s.id);
+  const signal = s.signal;
+  $("visible-signal").innerHTML = signal
+    ? "<strong>" +
+      esc(signal.label) +
+      '</strong><div class="signal-meter"><i style="width:' +
+      signal.charge +
+      '%"></i></div><b>' +
+      signal.charge.toFixed(0) +
+      "% CHARGED · " +
+      esc(signal.direction) +
+      " · " +
+      esc(signal.status) +
+      "</b>"
+    : "<p>Signal telemetry not supplied.</p>";
+  $("visible-signal").innerHTML += log
+    .filter((e) => e.strategyId === s.id)
+    .slice(0, 3)
+    .map((e) => "<p>" + e.time.toFixed(2) + "s · " + esc(eventText(e)) + "</p>")
+    .join("");
+}
+$("display-strategy").innerHTML = displayed.strategies
+  .map((s) => '<option value="' + s.id + '">' + esc(s.name) + "</option>")
+  .join("");
+$("display-strategy").onchange = renderMonitors;
+$("show-details").onclick = () =>
+  openStrategyWindow(displayStrategy(), "strategy");
+$("show-prices").onclick = $("monitor-price-open").onclick = () =>
+  openStrategyWindow(displayStrategy(), "chart");
+$("show-signals").onclick = $("monitor-signal-open").onclick = () =>
+  openStrategyWindow(displayStrategy(), "scanner");
+$("show-pnl").onclick = $("monitor-pnl-open").onclick = () =>
+  openPnlWindow(displayStrategy());
+$("show-workstation").onclick = () =>
+  select("workstation-" + displayStrategy());
+$("toggle-monitors").onclick = () => {
+  const hidden = !$("monitor-dock").hidden;
+  $("monitor-dock").hidden = hidden;
+  $("toggle-monitors").textContent = hidden ? "Show monitors" : "Hide monitors";
+  $("toggle-monitors").setAttribute("aria-pressed", String(!hidden));
+};
+
+function renderTicker(frame) {
+  $("ticker-label").textContent =
+    (frame.source || "imported").toUpperCase() + " / ACTIVITY";
+  const items = log
+    .slice(0, 22)
+    .reverse()
+    .map(
+      (e) =>
+        `<button ${e.orderId ? `data-order="${esc(e.orderId)}"` : ""}>${esc(eventText(e))}</button>`,
+    );
+  for (const s of frame.strategies)
+    items.push(
+      `<button data-entity="${s.id}">${exchangeOf(s)} / ${esc(s.name)} · ${esc(s.symbol)} · ${money(s.pnl)} · ${s.market?.price ?? "price not supplied"}</button>`,
+    );
+  if (!log.length)
+    items.unshift(
+      "<span>WAITING FOR OBSERVED EVENTS · " +
+        esc(frame.source || "imported") +
+        "</span>",
+    );
+  const html = items.join('<span class="ticker-separator">◆</span>');
+  const track = $("ticker-track");
+  if (track.dataset.content !== html) {
+    track.dataset.content = html;
+    track.innerHTML = `<div>${html}</div><div aria-hidden="true">${html}</div>`;
+  }
+}
+function setHistory(cards) {
+  historyCards = cards;
+  city.histories(cards);
+  $("historical-strip").innerHTML = cards
+    .map(
+      (c, i) =>
+        `<button data-history="${i}"><span class="mini-city"><i></i><i></i><i></i><i></i></span><small>${esc(c.label)}</small><b class="${c.pnl < 0 ? "negative" : "positive"}">${money(c.pnl)}</b><em>${esc(c.source)}</em></button>`,
+    )
+    .join("");
+}
+async function openHistory(card) {
+  if (card.remote) {
+    $("sessions").value = card.id;
+    await openRecording();
+  } else {
+    playing = false;
+    await seek(card.time);
+  }
+  windows.open(
+    "history",
+    "RECORDED SNAPSHOT",
+    kv("Capture", card.title || card.label) +
+      kv("P&L snapshot", money(card.pnl)) +
+      kv("Source", card.source),
+  );
+}
+$("detail-windows").onclick = (e) => {
+  const follow = e.target.closest("[data-follow]");
+  if (follow) {
+    followOrder(follow.dataset.follow);
+    return;
+  }
+  const pnl = e.target.closest("[data-pnl-strategy]"),
+    details = e.target.closest("[data-details]");
+  if (pnl) {
+    select("pnl-bridge-" + pnl.dataset.pnlStrategy);
+    return;
+  }
+  if (details) {
+    select(details.dataset.details);
+    return;
+  }
+  const interior = e.target.closest("[data-interior]"),
+    scanner = e.target.closest("[data-scanner]");
+  if (interior) select("workstation-" + interior.dataset.interior);
+  else if (scanner) openStrategyWindow(scanner.dataset.scanner, "scanner");
+};
+$("historical-strip").onclick = (e) => {
+  const b = e.target.closest("[data-history]");
+  if (b) openHistory(historyCards[Number(b.dataset.history)]);
+};
+$("ticker").onclick = (e) => {
+  const order = e.target.closest("[data-order]"),
+    entity = e.target.closest("[data-entity]");
+  if (order) followOrder(order.dataset.order);
+  else if (entity) select(entity.dataset.entity);
+};
 function stopOrder() {
   followGeneration++;
   activeOrder = null;
@@ -676,10 +1212,37 @@ $("import").onchange = async (e) => {
   }
   e.target.value = "";
 };
+let tickerOffset = 0,
+  tickerPaused = false,
+  manualTickerPaused = false;
+$("ticker-pause").onclick = () => {
+  manualTickerPaused = !manualTickerPaused;
+  $("ticker-pause").setAttribute("aria-pressed", String(manualTickerPaused));
+  $("ticker-pause").textContent = manualTickerPaused
+    ? "▶ Run ticker"
+    : "Ⅱ Pause ticker";
+};
+$("ticker").onmouseenter = () => (tickerPaused = true);
+$("ticker").onmouseleave = () => (tickerPaused = false);
+$("ticker").onfocusin = () => (tickerPaused = true);
+$("ticker").onfocusout = () => (tickerPaused = false);
+$("city-navigation").innerHTML =
+  '<option value="state">Market Nexus state</option>' +
+  EXCHANGES.map(
+    (e) => '<option value="' + e.id + '">' + e.id + " city</option>",
+  ).join("");
+$("city-navigation").onchange = (e) =>
+  e.target.value === "state" ? city.home() : select("city-" + e.target.value);
 let previous = performance.now();
 function tick(now) {
   const dt = Math.min((now - previous) / 1000, 0.25);
   previous = now;
+  const track = $("ticker-track"),
+    width =
+      track.firstElementChild?.getBoundingClientRect().width || innerWidth;
+  if (!tickerPaused && !manualTickerPaused)
+    tickerOffset = (tickerOffset + dt * 55) % width;
+  track.style.transform = "translate3d(" + -tickerOffset + "px,0,0)";
   if (mode !== "live" && playing && !loading) {
     const target = Math.min(time + dt * speed, end);
     if (mode === "recording" && target > frames.at(-1)?.time) {
@@ -705,6 +1268,8 @@ function tick(now) {
   requestAnimationFrame(tick);
 }
 loadLocal(local);
+seek(30);
+openStrategyWindow("mm", "strategy");
 refresh();
 setInterval(refresh, 15000);
 setInterval(() => {

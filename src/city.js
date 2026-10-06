@@ -1,18 +1,19 @@
 import * as T from "three";
+import { createCityExtras, hovercar } from "./city-extras.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { STRATEGIES } from "./model.js";
+import { EXCHANGES, stateLayout, exchangeOf } from "./exchanges.js";
 import { cityLayout } from "./scene-layout.js";
 
 export function createCity(host, onSelect, onOrder = () => {}) {
   const scene = new T.Scene();
   scene.background = new T.Color("#040315");
-  scene.fog = new T.FogExp2("#080726", 0.006);
-  const camera = new T.PerspectiveCamera(49, 1, 0.1, 350);
-  const homePosition = new T.Vector3(31, 25, 39),
+  scene.fog = new T.FogExp2("#080726", 0.0025);
+  const camera = new T.PerspectiveCamera(49, 1, 0.1, 600);
+  const homePosition = new T.Vector3(90, 90, 120),
     homeTarget = new T.Vector3(0, 5, 0);
   camera.position.copy(homePosition);
   const renderer = new T.WebGLRenderer({
@@ -27,7 +28,7 @@ export function createCity(host, onSelect, onOrder = () => {}) {
   orbit.enableDamping = true;
   orbit.target.copy(homeTarget);
   orbit.minDistance = 10;
-  orbit.maxDistance = 100;
+  orbit.maxDistance = 260;
   orbit.maxPolarAngle = Math.PI * 0.49;
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
@@ -310,8 +311,8 @@ export function createCity(host, onSelect, onOrder = () => {}) {
   ring(2.6, 0.08, gold);
   ring(2.8, 0.2, cyan);
   const vaultPanel = billboard(
-    "EXCHANGE VAULT",
-    ["Waiting for telemetry", "CME / read-only observer"],
+    "MARKET NEXUS STATE",
+    ["Waiting for telemetry", "Exchange cities / strategy towers"],
     new T.Vector3(0, 5, 1),
     5.4,
     "#ffdda0",
@@ -415,7 +416,7 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     group.add(tag);
     textPanel(tag, name, ["Waiting for data", "No measured activity"]);
     const badge = billboard(
-      STRATEGIES[index].symbol,
+      name,
       ["STRATEGY NODE " + (index + 1)],
       new T.Vector3(spec.x, 1, spec.z + 2.7),
       2.3,
@@ -437,9 +438,122 @@ export function createCity(host, onSelect, onOrder = () => {}) {
       index,
     };
   }
-  STRATEGIES.forEach((s, i) =>
-    towers.set(s.id, landmark(layout.landmarks[i], s.id, s.name, i)),
-  );
+  const cityPanels = new Map(),
+    cityBases = new Map();
+  for (const venue of EXCHANGES) {
+    const group = new T.Group();
+    group.position.set(venue.x, 0, venue.z);
+    scene.add(group);
+    const base = add(
+      new T.CylinderGeometry(14, 12, 1.2, 64),
+      material(0x152448, 0.3),
+      new T.Vector3(0, -0.7, 0),
+      group,
+    );
+    base.userData.id = "city-" + venue.id;
+    targets.push(base);
+    cityBases.set(venue.id, base);
+    ring(14, 0.05, venue.color, group, 0.08);
+    ring(12, -1.2, venue.color, group, 0.06);
+    const buildings = [];
+    for (let i = 0; i < 64; i++) {
+      const a = (i * Math.PI * 2) / 64,
+        r = 11.7 + (i % 3) * 0.45;
+      buildings.push({
+        x: Math.cos(a) * r,
+        z: Math.sin(a) * r,
+        y: 0,
+        width: 0.4 + (i % 3) * 0.12,
+        depth: 0.5,
+        height: 1 + (i % 7) * 0.32,
+      });
+    }
+    urbanBuildings(buildings, group);
+    const hub = add(
+      new T.CylinderGeometry(1.2, 1.5, 2.2, 12),
+      material(venue.color, 0.3),
+      new T.Vector3(0, 1, 0),
+      group,
+    );
+    hub.userData.id = "city-" + venue.id;
+    targets.push(hub);
+    const panel = billboard(
+      venue.id + " CITY",
+      ["Waiting for source strategies"],
+      new T.Vector3(venue.x, 16, venue.z),
+      9,
+      "#" + venue.color.toString(16),
+    );
+    panel.userData.id = "city-" + venue.id;
+    targets.push(panel);
+    cityPanels.set(venue.id, panel);
+    // Long illuminated state highways join the cities to the central services.
+    lines(
+      [
+        new T.Vector3(venue.x, 0, venue.z),
+        new T.Vector3(venue.x * 0.55, 1, venue.z * 0.55),
+        new T.Vector3(0, 0, 0),
+      ],
+      venue.color,
+      scene,
+      0.3,
+    );
+  }
+  function removeTower(t) {
+    const removed = new Set();
+    t.group.traverse((o) => removed.add(o));
+    removed.add(t.badge);
+    for (let i = targets.length - 1; i >= 0; i--)
+      if (removed.has(targets[i])) targets.splice(i, 1);
+    for (let i = rings.length - 1; i >= 0; i--)
+      if (removed.has(rings[i].object)) rings.splice(i, 1);
+    t.group.parent?.remove(t.group);
+    t.badge.parent?.remove(t.badge);
+    for (const o of removed) {
+      o.geometry?.dispose();
+      if (o.material && o.material !== facade) {
+        o.material.map?.dispose();
+        o.material.dispose();
+      }
+    }
+  }
+  function syncCities(frame) {
+    const active = new Set(frame.strategies.map((s) => s.id));
+    for (const [id, t] of towers)
+      if (!active.has(id)) {
+        removeTower(t);
+        towers.delete(id);
+      }
+    for (const city of stateLayout(frame.strategies)) {
+      const radius = Math.max(
+        14,
+        5.5 + Math.floor(Math.max(0, city.strategies.length - 1) / 8) * 3 + 3,
+      );
+      cityBases.get(city.id).scale.set(radius / 14, 1, radius / 14);
+      textPanel(
+        cityPanels.get(city.id),
+        city.id + " CITY",
+        [
+          city.strategies.length + " STRATEGY TOWERS",
+          (city.pnl < 0 ? "-" : "+") + "$" + Math.abs(city.pnl).toFixed(0),
+          frame.source?.toUpperCase() || "IMPORTED",
+        ],
+        "#" + city.color.toString(16),
+      );
+      for (const spec of city.towers) {
+        const strategy = frame.strategies.find((s) => s.id === spec.id);
+        if (!towers.has(spec.id))
+          towers.set(
+            spec.id,
+            landmark(spec, spec.id, strategy.name, spec.index),
+          );
+        const t = towers.get(spec.id);
+        t.group.position.set(spec.x, 0.22, spec.z);
+        t.badge.position.set(spec.x, 1, spec.z + 2.7);
+        t.exchange = city.id;
+      }
+    }
+  }
   // Separate floating feed/execution islands with luminous suspension bridges.
   const feedBeams = new Map(),
     nodes = {
@@ -567,12 +681,22 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     }
     const curve = new T.CatmullRomCurve3(points, true);
     lines(points, i % 2 ? violet : cyan, scene, 0.07);
-    const bead = add(
-      new T.SphereGeometry(0.055, 6, 6),
-      neon(i % 2 ? violet : cyan),
-    );
+    const bead = hovercar(i);
+    scene.add(bead);
+    targets.push(bead.userData.hull);
     flows.push({ curve, bead, phase: i * 0.137, speed: 0.012 + i * 0.002 });
   }
+  const extras = createCityExtras({
+    scene,
+    towers,
+    targets,
+    canvasSprite,
+    textPanel,
+    billboard,
+    add,
+    neon,
+    ring,
+  });
   // Nebula dust and distant starfield, rendered as two point clouds.
   const dotCanvas = document.createElement("canvas");
   dotCanvas.width = 32;
@@ -659,6 +783,17 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     const hit = ray.intersectObjects(targets, false)[0];
     if (hit) onSelect(hit.object.userData.id);
   });
+  renderer.domElement.addEventListener("dblclick", (e) => {
+    const rect = renderer.domElement.getBoundingClientRect();
+    pointer.set(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      (-(e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    ray.setFromCamera(pointer, camera);
+    const hit = ray.intersectObjects(targets, false)[0];
+    if (hit && towers.has(hit.object.userData.id))
+      onSelect("workstation-" + hit.object.userData.id);
+  });
   orbit.addEventListener("start", () => {
     flight = null;
     tour = false;
@@ -666,6 +801,7 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     followQueue = [];
   });
   function clearEffects() {
+    extras.clear();
     for (const e of effects) {
       scene.remove(e.group);
       e.group.traverse((o) => {
@@ -678,6 +814,7 @@ export function createCity(host, onSelect, onOrder = () => {}) {
   }
   function update(frame, health = {}) {
     lastFrame = frame;
+    syncCities(frame);
     let total = 0;
     for (const s of frame.strategies) {
       const t = towers.get(s.id);
@@ -724,7 +861,7 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     }
     textPanel(
       vaultPanel,
-      "EXCHANGE VAULT",
+      "MARKET NEXUS STATE",
       [
         `${total < 0 ? "-" : "+"}$${Math.abs(total).toLocaleString("en-US", { maximumFractionDigits: 0 })}`,
         `${frame.source?.toUpperCase() || "IMPORTED"} / ${frame.time.toFixed(1)}s`,
@@ -770,8 +907,40 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     effects.push({ group, halo, sphere, age: 0, duration: 1.2, pulse: true });
   }
   function emit(event, forceFollow = false) {
+    const origin =
+      towers
+        .get(event.strategyId)
+        ?.group.position.clone()
+        .add(new T.Vector3(0, 6, 0)) ||
+      nodes[event.feed] ||
+      nodes.risk;
+    if (event.type === "SIGNAL_GENERATED") {
+      extras.burst(
+        origin,
+        0x65ffff,
+        "SIGNAL / " + event.strategyId.toUpperCase(),
+        event,
+      );
+      return;
+    }
+    if (event.type === "PROFIT_LOCKED") {
+      extras.burst(
+        origin,
+        0xffdf86,
+        "PROFIT LOCKED " + event.amount.toFixed(2),
+        event,
+      );
+      return;
+    }
+    if (event.type === "RISK_REJECTED" || event.type === "FEED_GAP")
+      extras.burst(origin, 0xff5caa, event.type.replaceAll("_", " "), event);
     if (event.type === "RISK_WARNING" || event.type === "RISK_LIMIT_BREACHED") {
-      pulse(nodes.risk, 0xffaa44);
+      extras.burst(
+        nodes.risk,
+        0xffaa44,
+        event.type.replaceAll("_", " "),
+        event,
+      );
       return;
     }
     if (effects.length >= 100) return;
@@ -782,6 +951,9 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     }
     const tower = towers.get(event.strategyId);
     if (!tower) return;
+    const venue = EXCHANGES.find((e) => e.id === tower.exchange);
+    const exchangeNode = new T.Vector3(venue.x, 3, venue.z);
+    const gatewayNode = exchangeNode.clone().add(new T.Vector3(0, 1, 4));
     let a, b;
     switch (event.type) {
       case "ORDER_CREATED":
@@ -795,14 +967,14 @@ export function createCity(host, onSelect, onOrder = () => {}) {
         break;
       case "ORDER_SENT":
         a = nodes.risk;
-        b = nodes.gateway;
+        b = gatewayNode;
         break;
       case "ORDER_ACK":
-        a = nodes.gateway;
-        b = nodes.exchange;
+        a = gatewayNode;
+        b = exchangeNode;
         break;
       case "FILL":
-        a = nodes.exchange;
+        a = exchangeNode;
         b = tower.group.position.clone().add(new T.Vector3(0, 5, 0));
         break;
       default:
@@ -836,6 +1008,7 @@ export function createCity(host, onSelect, onOrder = () => {}) {
       );
     for (const bead of beads) bead.userData.orderId = event.orderId;
     effects.push({
+      event,
       orderId: event.orderId,
       forced: forceFollow,
       group,
@@ -868,8 +1041,12 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     particles.rotation.y = elapsed * 0.007;
     starfield.rotation.y = elapsed * 0.0007;
     for (const r of rings) r.object.rotation[r.axis] += dt * r.speed;
-    for (const f of flows)
-      f.bead.position.copy(f.curve.getPoint((elapsed * f.speed + f.phase) % 1));
+    extras.animate(dt, elapsed);
+    for (const f of flows) {
+      const t = (elapsed * f.speed + f.phase) % 1;
+      f.bead.position.copy(f.curve.getPoint(t));
+      f.bead.lookAt(f.bead.position.clone().add(f.curve.getTangent(t)));
+    }
     if (flight) {
       flight.age += dt;
       const p = Math.min(flight.age / 1.5, 1),
@@ -881,9 +1058,9 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     if (tour && !flight) {
       const a = elapsed * 0.035;
       camera.position.set(
-        Math.sin(a) * 48,
-        25 + Math.sin(elapsed * 0.13) * 2,
-        Math.cos(a) * 48,
+        Math.sin(a) * 125,
+        85 + Math.sin(elapsed * 0.13) * 5,
+        Math.cos(a) * 125,
       );
       orbit.target.set(0, 5, 0);
     }
@@ -923,7 +1100,8 @@ export function createCity(host, onSelect, onOrder = () => {}) {
           m.visible = p - j * 0.013 >= 0;
         });
       if (p >= 1) {
-        if (e.fill && effects.length < 100) pulse(e.end, e.color);
+        if (e.fill && effects.length < 100)
+          extras.burst(e.end, e.color, "FILL CONFIRMED", e.event);
         scene.remove(e.group);
         e.group.traverse((o) => {
           o.geometry?.dispose();
@@ -951,6 +1129,16 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     update,
     emit,
     clearEffects,
+    data(frame, events, history) {
+      extras.update(frame, events, history);
+    },
+    histories(cards) {
+      extras.histories(cards);
+    },
+    interior(id) {
+      const view = extras.interior(id);
+      fly(view.position, view.target);
+    },
     health(map) {
       if (lastFrame) update(lastFrame, map);
     },
@@ -966,6 +1154,15 @@ export function createCity(host, onSelect, onOrder = () => {}) {
       followQueue = [];
     },
     focus(id) {
+      if (id.startsWith("city-")) {
+        const v = EXCHANGES.find((e) => e.id === id.slice(5));
+        if (v) {
+          const p = new T.Vector3(v.x, 3, v.z);
+          fly(p.clone().add(new T.Vector3(18, 24, 28)), p);
+        }
+        return;
+      }
+      if (id.startsWith("pnl-bridge-")) id = id.slice(11);
       for (const [key, t] of towers) t.selection.visible = key === id;
       const t = towers.get(id);
       if (t) {

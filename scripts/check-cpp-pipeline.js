@@ -39,16 +39,17 @@ try {
   );
   const [code] = await completed;
   if (code !== 0) throw Error("C++ example failed");
-  const expected = readFileSync(path, 'utf8').trim().split('\n').length;
+  const expected = readFileSync(path, "utf8").trim().split("\n").length;
   let saved = 0;
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
-    const status = await (await fetch(url + '/api/sessions')).json();
+    const status = await (await fetch(url + "/api/sessions")).json();
     saved = status.sessions[0]?.frame_count || 0;
     if (saved === expected) break;
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 100));
   }
-  if (saved !== expected) throw Error(`Only ${saved}/${expected} frames persisted`);
+  if (saved !== expected)
+    throw Error(`Only ${saved}/${expected} frames persisted`);
   bridge.kill();
   await once(bridge, "exit");
   const data = await (await fetch(url + "/api/sessions")).json();
@@ -60,7 +61,11 @@ try {
   );
   const [bytes] = await once(ws, "message");
   const f = validateFrame(JSON.parse(bytes));
-  if (f.source !== "example" || f.strategies[0].state !== "RUNNING")
+  if (
+    f.source !== "example" ||
+    f.strategies[0].state !== "RUNNING" ||
+    f.strategies[0].exchange !== "CME"
+  )
     throw Error("Wrong snapshot");
   ws.close();
   console.log(

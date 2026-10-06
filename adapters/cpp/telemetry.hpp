@@ -38,6 +38,7 @@ public:
     std::uint64_t dropped() const noexcept { return drops_.load(std::memory_order_relaxed); }
 };
 enum class Kind : std::uint8_t { StrategySnapshot, FeedSnapshot, OrderCreated, RiskPassed, RiskRejected, OrderSent, OrderAck, Fill, FeedGap, FeedRecovered };
+enum class Exchange : std::uint8_t { Unassigned, CME, B3, A5X, NASDAQ, NYSE };
 enum class State : std::uint8_t { Running, Idle, Degraded, Stopped };
 // IDs 0..4 identify mm/arb/mom/vwap/rev. Feed IDs are 0=A and 1=B.
 // Prices and P&L are signed millionths of display currency units.
@@ -45,6 +46,7 @@ struct Event {
     Kind kind{Kind::StrategySnapshot};
     std::uint8_t entity{0};
     State state{State::Idle};
+    Exchange exchange{Exchange::Unassigned};
     bool buy{true};
     std::uint64_t timestamp_ns{0}, order_id{0};
     std::int64_t price_micro{0}, pnl_micro{0}, position{0}, quantity{1};
@@ -63,6 +65,9 @@ class Aggregator {
     inline static constexpr const char* symbols_[5] = {"ES","NQ","CL","ZN","GC"};
     static const char* state(State state) {
         switch(state){case State::Running:return "RUNNING";case State::Degraded:return "DEGRADED";case State::Stopped:return "STOPPED";default:return "IDLE";}
+    }
+    static const char* exchange(Exchange value) {
+        switch(value){case Exchange::CME:return "CME";case Exchange::B3:return "B3";case Exchange::A5X:return "A5X";case Exchange::NASDAQ:return "NASDAQ";case Exchange::NYSE:return "NYSE";default:return "UNASSIGNED";}
     }
     static const char* type(Kind kind) {
         switch(kind){case Kind::OrderCreated:return "ORDER_CREATED";case Kind::RiskPassed:return "RISK_PASSED";case Kind::RiskRejected:return "RISK_REJECTED";case Kind::OrderSent:return "ORDER_SENT";case Kind::OrderAck:return "ORDER_ACK";case Kind::Fill:return "FILL";case Kind::FeedGap:return "FEED_GAP";default:return "FEED_RECOVERED";}
@@ -84,7 +89,7 @@ public:
         out<<"{\"version\":1,\"source\":\""<<(example?"example":"telemetry")<<"\",\"seq\":"<<++sequence_<<",\"time\":"<<elapsed_ns/1e9<<",\"dropped\":"<<producer_drops+omitted_<<",\"strategies\":[";
         for(std::size_t i=0;i<5;i++){
             const auto& s=strategies_[i];if(i)out<<',';
-            out<<"{\"id\":\""<<ids_[i]<<"\",\"name\":\""<<names_[i]<<"\",\"symbol\":\""<<symbols_[i]<<"\",\"state\":\""<<state(s.state)<<"\",\"pnl\":"<<s.pnl_micro/1e6<<",\"position\":"<<s.position<<",\"orders\":"<<s.orders<<",\"fills\":"<<s.fills<<",\"latency\":"<<s.latency_ns<<'}';
+            out<<"{\"id\":\""<<ids_[i]<<"\",\"name\":\""<<names_[i]<<"\",\"symbol\":\""<<symbols_[i]<<"\",\"exchange\":\""<<exchange(s.exchange)<<"\",\"state\":\""<<state(s.state)<<"\",\"pnl\":"<<s.pnl_micro/1e6<<",\"position\":"<<s.position<<",\"orders\":"<<s.orders<<",\"fills\":"<<s.fills<<",\"latency\":"<<s.latency_ns<<'}';
         }
         out<<"],\"feeds\":[";
         for(std::size_t i=0;i<2;i++){const auto& f=feeds_[i];if(i)out<<',';out<<"{\"id\":\""<<(i?"B":"A")<<"\",\"seq\":"<<f.feed_sequence<<",\"gaps\":"<<f.gaps<<",\"state\":\""<<(f.state==State::Running?"HEALTHY":f.state==State::Degraded?"DEGRADED":"OFFLINE")<<"\"}";}

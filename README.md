@@ -1,11 +1,100 @@
-# Market Nexus v4 — health, bookmarks and order follow
+# Market Nexus v7 — exchange cities and strategy P&L bridges
 
 A local, read-only 3D telemetry application with authenticated ingestion,
 persistent SQLite recordings, live WebSocket viewing, and paged historical
 playback. The server starts empty and never fabricates trades. Simulations and
 the C++ example are explicitly labeled. No exchange credentials are included.
 
-## New in v4
+## New in v7
+
+Market Nexus is the state. CME, B3, A5X, NASDAQ and NYSE are distinct floating
+cities around the central observer services. Each source strategy is a tower
+inside its declared exchange city. Each tower has a physical elevated bridge
+from its district to the city rim; the glowing chart on it uses only that
+strategy's observed P&L. All bridges are present in the cinematic scene without
+opening Engineering or clicking a control. The central aggregate bridge remains
+available for the state total, with independent chart scopes.
+
+Use the City selector to fly into a venue, or Reset camera for the full state.
+Click a city label, strategy tower or bridge for details. The demo has two towers
+per exchange, ten in total. Demo instrument labels and prices are synthetic;
+the city names are configured visualization venues, not connectivity claims.
+Follow this order remains available in cards, the event stream and ticker.
+Recorded ACK/FILL animations now travel through that strategy's exchange city.
+
+Producers may send **1–40 strategies** per complete frame, using unique lowercase
+IDs matching `[a-z][a-z0-9_]{0,31}`. Add optional `exchange` with CME, B3, A5X,
+NASDAQ, NYSE or UNASSIGNED. Multiple strategies can share the same venue. Omitted
+exchange fields go to UNASSIGNED; venue is never guessed from a symbol. Frames
+must remain within the existing 128 KiB ingestion limit. The two A/B feed slots
+remain shared observer inputs; this release does not invent venue-specific feed
+subscriptions. The C++ producer retains its five strategy slots and supports explicit venue
+identity via `Event.exchange = nexus::Exchange::CME` (or B3/A5X/NASDAQ/NYSE).
+Its default is Unassigned. Recompile producer and aggregator together with the
+updated header. Old recordings without exchange fields remain supported.
+
+The fixed, 56-pixel bottom broadcast ribbon advances at 55 pixels/second, even
+while replay is paused. Updating messages does not restart its offset. Hover,
+keyboard focus or Pause ticker stops it; Run ticker resumes. It shows observed
+order activity and venue/strategy/instrument/P&L/price values. The version beside
+the title is **v7.0.0**. Stop an older server before starting this extracted folder.
+
+## Included from v6
+
+The P&L chart is now an elevated, luminous bridge across the city, plotting
+actual recorded total P&L. Click its deck, graph or label for the full chart.
+Visible price, P&L and signal monitors open by default in both viewing modes.
+The demo begins at 30 seconds so candles and observed activity are immediately
+present. Direct buttons below the metrics open Details, Price chart, Signal
+scanner, P&L bridge and Robot workstation without finding a tiny scene object.
+A strategy detail card opens at startup; drag its title bar or close it.
+Each card has **Pop out ↗**, which opens a separate browser window or tab with
+source details and chart images. It updates while the original card is open;
+closing that card leaves the detached page at its last snapshot. Browser popup
+settings may require allowing popups for the local application.
+The larger bottom marquee stays visible in both modes. **v7.0.0** appears beside
+the title so an older running build is easy to identify. Static HTML is served
+with no-store and assets with revalidation headers.
+
+When upgrading: stop the old server with Ctrl+C, extract this ZIP to a new folder,
+copy your old `data` folder if retaining recordings, then run `npm ci` and
+`npm start` from the new `market-nexus` directory. Open the URL below and press
+Ctrl+Shift+R. Confirm **v7.0.0** beside the title. A server already running from
+an older directory continues serving that directory until stopped.
+
+## Included from v5
+
+- Seven flying hovercars with hulls, cockpits, wings, engines and exhaust follow
+  orbital paths. Click one for details; they are decorative traffic.
+- Observed fills, feed gaps, risk warnings and signals trigger bright flashes,
+  expanding energy spheres, shock rings, particle explosions and clickable
+  announcement banners. Profit banners require an explicit PROFIT_LOCKED event.
+- A continuous bottom ticker shows source events, prices and P&L. Hover or focus
+  pauses scrolling; click an order to follow it or a strategy to inspect it.
+- Click towers, holographic charts, scanners, feed objects or historical cities
+  to open contextual detail rectangles. Up to six windows can be dragged and
+  closed; Escape closes the front window.
+- Floating price charts display supplied OHLC candles with observed fill markers.
+  Without market bars, they show labeled execution prices or an unavailable state.
+- Signal scanners display supplied setup, direction, charge, status and recent
+  timestamped activity. Activity is observed telemetry, not generated reasoning.
+- Double-click a tower or choose Enter workstation to fly to the shared robot
+  workstation. Its monitors display the selected strategy's chart and scanner.
+- Historical mini cities and the bottom history strip seek to real captured
+  snapshots. Local files use elapsed-time samples; stored sessions show capture
+  creation dates and their latest P&L snapshot, not aggregate daily returns.
+
+The bundled demo includes synthetic OHLC and signals so every display can be
+explored immediately. Existing producers continue to work without these fields.
+Optional strategy fields are `market: {price, bars: [{time, open, high, low, close}]}`
+(up to 120 chronologically ordered bars) and `signal: {label, direction, charge,
+status, updatedAt}`. Direction is BUY/SELL/NEUTRAL, charge is 0–100, and status is
+WATCHING/READY/FIRED/IDLE. All timestamps are elapsed session seconds and must
+not exceed the frame time. Optional event SIGNAL_GENERATED carries id, strategyId,
+time, message and charge; PROFIT_LOCKED carries id, strategyId, time and amount.
+The frontend bounds concurrent explosions to 14 and announcements to eight.
+
+## Included from v4
 
 - Health: gray idle/waiting, amber degraded, purple stale, red stopped/offline/
   disconnected, cyan healthy. Negative P&L beams remain magenta when health is
@@ -37,14 +126,13 @@ the C++ example are explicitly labeled. No exchange credentials are included.
 ## Visual redesign
 
 The default view is now the floating city: 233 surrounding buildings with
-procedurally illuminated facades, five tiered strategy skyscrapers, rotating
+procedurally illuminated facades, source-driven strategy skyscrapers, rotating
 crown rings, vertical beams, a luminous exchange vault and armillary, layered
 floating foundations, perimeter railings, three satellite islands, suspension
 bridges, nebula dust and stars. Holographic strategy panels show source P&L,
 position, orders/fills and a recent P&L sparkline. Feed labels show source health,
 packet sequence and gaps. Actual observed order events draw luminous comet
-trails; fills and feed events trigger expanding rings. Ambient orbital lights
-are decorative and do not represent orders.
+trails; fills and feed events trigger expanding rings. Hovercars are decorative and do not represent orders.
 
 The city opens in cinematic mode. Click Engineering to reveal the full data
 panels and file/session controls; click Cinematic to return. Camera tour performs
@@ -110,12 +198,13 @@ elapsed time. Acknowledgment means the frame was committed to SQLite with FULL
 synchronous mode; visualization is broadcast afterward. Identical retries are
 idempotent. Conflicting retries or decreasing sequence/time return HTTP 409.
 
-Every frame contains version=1, seq, time, source, five strategies, two feeds,
+Every frame contains version=1, seq, time, source, 1–40 strategies, two feeds,
 and an events array. Optional dropped is the cumulative producer/aggregation
 drop count. See `src/model.js` for the exact validator and field definitions.
-The strategy slots are mm, arb, mom, vwap and rev. Names and symbols are supplied
-by the producer; map your five initial strategy instances to these slots.
-The current layout is limited to five slots; it is not a dynamic fleet manager.
+Strategy IDs, names, symbols and optional exchange identity are supplied by
+the producer. The C++ example retains mm, arb, mom, vwap and rev; JSON adapters
+may supply other validated IDs. The scene creates and removes towers and their
+charts from each complete snapshot, with a maximum of 40 active strategies.
 
 State is authoritative for this visualization. Events are sampled animation
 hints. Send periodic complete snapshots sourced from your engine; dropped event
@@ -263,6 +352,10 @@ idempotency, sequence conflicts, restart recovery, WS snapshots and storage quot
 The C++ queue test exercises FIFO concurrency and saturation. After compiling the
 C++ example on Linux, `node scripts/check-cpp-pipeline.js` tests the complete
 C++ → appended file → Python bridge → SQLite → WebSocket path.
+
+The v7 automated suite contains 30 tests, including venue grouping, individual
+bridge scope, dynamic fleet cleanup, candle/signal validation,
+source-based history summaries and presentation data.
 
 Interactive browser QA was unavailable in the authoring environment. Build,
 backend and C++/Python integration tests were executed. Native Node SQLite may

@@ -3,20 +3,71 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Market Nexus</title>
+    <title>Market Nexus v7 — Exchange Cities & Strategy Bridges</title>
   </head>
   <body class="cinematic">
     <div id="world"></div>
+    <div id="detail-windows"></div>
+    <div id="historical-strip" aria-label="Historical snapshots"></div>
+    <div id="ticker" aria-label="Observed activity ticker">
+      <b id="ticker-label">LIVE ACTIVITY</b>
+      <div id="ticker-viewport">
+        <div id="ticker-track">
+          <div>MARKET NEXUS v7 · Loading source activity…</div>
+          <div aria-hidden="true">
+            MARKET NEXUS v7 · Loading source activity…
+          </div>
+        </div>
+      </div>
+      <button id="ticker-pause" aria-pressed="false">Ⅱ Pause ticker</button>
+    </div>
     <header>
       <div>
         <small>READ-ONLY TRADING OBSERVABILITY</small>
-        <h1>MARKET <span>NEXUS</span></h1>
+        <h1>MARKET <span>NEXUS</span> <b id="build-version">v7.0.0</b></h1>
       </div>
       <div id="connection" role="status">LOCAL SIMULATION</div>
       <button id="cinematic">Engineering</button
       ><button id="home">Reset camera</button
       ><button id="tour" aria-pressed="false">Camera tour</button>
     </header>
+    <nav id="feature-controls" aria-label="City displays">
+      <label
+        >City
+        <select id="city-navigation" aria-label="Exchange city"></select
+      ></label>
+      <label
+        >Strategy
+        <select id="display-strategy"></select
+      ></label>
+      <button id="show-details">Details ↗</button>
+      <button id="show-prices">Price chart</button>
+      <button id="show-signals">Signal scanner</button>
+      <button id="show-pnl">Strategy bridge</button>
+      <button id="show-workstation">Robot workstation</button>
+      <button id="toggle-monitors" aria-pressed="true">Hide monitors</button>
+    </nav>
+    <section
+      id="monitor-dock"
+      aria-label="Visible price chart and signal scanner"
+    >
+      <h2 id="monitor-title">PRICE / SIGNAL MONITORS</h2>
+      <div id="monitor-price-label"></div>
+      <canvas
+        id="visible-price-chart"
+        class="window-chart"
+        width="480"
+        height="170"
+        data-chart="mm"
+      ></canvas>
+      <button id="monitor-price-open">Open price chart ↗</button>
+      <h2>SELECTED STRATEGY P&amp;L BRIDGE</h2>
+      <canvas id="visible-pnl-chart" width="480" height="140"></canvas>
+      <button id="monitor-pnl-open">Inspect bridge ↗</button>
+      <h2>SIGNAL SCANNER</h2>
+      <div id="visible-signal"></div>
+      <button id="monitor-signal-open">Open scanner ↗</button>
+    </section>
     <section id="metrics"></section>
     <div id="health-status" role="status"></div>
     <section id="order-panel" class="panel" hidden>

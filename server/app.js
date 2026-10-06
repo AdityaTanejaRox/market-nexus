@@ -225,6 +225,21 @@ export function createApp({
         });
       if (req.method === "GET" && url.pathname === "/api/sessions")
         return json(res, 200, { sessions: list.all() });
+      const summaryMatch = url.pathname.match(
+        /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/summary$/,
+      );
+      if (req.method === "GET" && summaryMatch) {
+        const info = sessionInfo.get(summaryMatch[1]);
+        if (!info) return json(res, 404, { error: "Session not found" });
+        const row = latest.get(info.id);
+        const frame = JSON.parse(row.json);
+        return json(res, 200, {
+          ...info,
+          time: frame.time,
+          pnl: frame.strategies.reduce((n, s) => n + s.pnl, 0),
+          frame,
+        });
+      }
       const eventMatch = url.pathname.match(
         /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/(bookmarks|orders)$/,
       );
@@ -400,6 +415,7 @@ export function createApp({
       };
       res.writeHead(200, {
         "Content-Type": types[extname(path)] || "application/octet-stream",
+        "Cache-Control": extname(path) === ".html" ? "no-store" : "no-cache",
       });
       if (req.method === "HEAD") return res.end();
       createReadStream(path)
