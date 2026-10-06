@@ -5,338 +5,847 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { STRATEGIES } from "./model.js";
-export function createCity(host, onSelect) {
+import { cityLayout } from "./scene-layout.js";
+
+export function createCity(host, onSelect, onOrder = () => {}) {
   const scene = new T.Scene();
-  scene.background = new T.Color("#050912");
-  scene.fog = new T.FogExp2("#050912", 0.011);
-  const camera = new T.PerspectiveCamera(48, 1, 0.1, 180);
-  camera.position.set(26, 23, 32);
+  scene.background = new T.Color("#040315");
+  scene.fog = new T.FogExp2("#080726", 0.006);
+  const camera = new T.PerspectiveCamera(49, 1, 0.1, 350);
+  const homePosition = new T.Vector3(31, 25, 39),
+    homeTarget = new T.Vector3(0, 5, 0);
+  camera.position.copy(homePosition);
   const renderer = new T.WebGLRenderer({
     antialias: true,
     powerPreference: "high-performance",
   });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.6));
   renderer.toneMapping = T.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.1;
   host.appendChild(renderer.domElement);
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.target.set(0, 3, 0);
-  controls.minDistance = 13;
-  controls.maxDistance = 65;
-  controls.maxPolarAngle = Math.PI * 0.47;
+  const orbit = new OrbitControls(camera, renderer.domElement);
+  orbit.enableDamping = true;
+  orbit.target.copy(homeTarget);
+  orbit.minDistance = 10;
+  orbit.maxDistance = 100;
+  orbit.maxPolarAngle = Math.PI * 0.49;
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  composer.addPass(new UnrealBloomPass(new T.Vector2(1, 1), 0.8, 0.5, 0.7));
+  const bloom = new UnrealBloomPass(new T.Vector2(1, 1), 1.05, 0.65, 0.8);
+  composer.addPass(bloom);
   composer.addPass(new OutputPass());
-  scene.add(new T.HemisphereLight(0x86ceff, 0x111324, 2));
-  const light = new T.DirectionalLight(0x91baff, 3);
-  light.position.set(10, 20, 10);
-  scene.add(light);
-  const cyan = 0x58e8ff,
-    pink = 0xff4d94,
-    amber = 0xffbd66,
+  scene.add(new T.HemisphereLight(0x8b9aff, 0x100421, 1.8));
+  const key = new T.DirectionalLight(0x91adff, 2.8);
+  key.position.set(10, 30, 20);
+  scene.add(key);
+  const wash = new T.PointLight(0x3535ff, 220, 70, 2);
+  wash.position.set(0, 8, 0);
+  scene.add(wash);
+  const cyan = 0x38eeff,
+    pink = 0xff3caf,
+    gold = 0xffd48b,
+    violet = 0x8461ff;
+  const layout = cityLayout(),
     towers = new Map(),
     targets = [],
+    rings = [],
+    beacons = [],
+    flows = [],
     effects = [];
-  function mesh(geometry, color, glow = false) {
-    return new T.Mesh(
-      geometry,
-      new T.MeshStandardMaterial({
-        color,
-        metalness: 0.6,
-        roughness: 0.35,
-        emissive: color,
-        emissiveIntensity: glow ? 2 : 0.08,
-      }),
-    );
-  }
-  function ring(radius, y, color) {
-    const m = mesh(new T.TorusGeometry(radius, 0.035, 8, 180), color, true);
-    m.rotation.x = Math.PI / 2;
-    m.position.y = y;
-    scene.add(m);
+  let tour = false,
+    disposed = false,
+    flight = null;
+  let following = null,
+    followQueue = [],
+    followTimer = 0,
+    lastFrame = null;
+  const material = (color, emission = 0) =>
+    new T.MeshStandardMaterial({
+      color,
+      metalness: 0.7,
+      roughness: 0.32,
+      emissive: color,
+      emissiveIntensity: emission,
+    });
+  const neon = (color, opacity = 1) =>
+    new T.MeshBasicMaterial({
+      color,
+      transparent: opacity < 1,
+      opacity,
+      depthWrite: opacity === 1,
+      toneMapped: false,
+    });
+  function add(geometry, mat, position, parent = scene) {
+    const m = new T.Mesh(geometry, mat);
+    if (position) m.position.copy(position);
+    parent.add(m);
     return m;
   }
-  const platform = mesh(new T.CylinderGeometry(12, 10.8, 0.8, 96), 0x102335);
-  platform.position.y = -0.45;
-  scene.add(platform);
-  const underside = mesh(new T.ConeGeometry(10.5, 3.5, 64), 0x091426);
-  underside.rotation.z = Math.PI;
-  underside.position.y = -2.6;
-  scene.add(underside);
-  [12, 11.5, 9.8, 4].forEach((r, i) =>
-    ring(r, 0.06 + i * 0.01, i % 2 ? 0x4c67ff : cyan),
-  );
-  for (let i = 0; i < 48; i++) {
-    const a = (i / 48) * Math.PI * 2;
-    const m = mesh(new T.BoxGeometry(0.24, 0.09, 0.55), cyan, true);
-    m.position.set(Math.cos(a) * 11.75, 0.15, Math.sin(a) * 11.75);
-    m.rotation.y = -a;
-    scene.add(m);
+  function ring(radius, y, color, parent = scene, thickness = 0.035) {
+    const m = add(
+      new T.TorusGeometry(radius, thickness, 6, 96),
+      neon(color),
+      new T.Vector3(0, y, 0),
+      parent,
+    );
+    m.rotation.x = Math.PI / 2;
+    return m;
   }
-  const grid = new T.GridHelper(23, 32, 0x195267, 0x102c40);
-  grid.position.y = 0.025;
-  scene.add(grid);
-  function label(text, color = cyan) {
-    const c = document.createElement("canvas");
-    c.width = 512;
-    c.height = 96;
-    const ctx = c.getContext("2d");
-    ctx.fillStyle = "#071624";
-    ctx.fillRect(0, 0, 512, 96);
-    ctx.strokeStyle = `#${color.toString(16).padStart(6, "0")}`;
-    ctx.lineWidth = 3;
-    ctx.strokeRect(2, 2, 508, 92);
-    ctx.fillStyle = "#d9f7ff";
-    ctx.font = "bold 25px monospace";
-    ctx.textAlign = "center";
-    ctx.fillText(text, 256, 58);
-    const texture = new T.CanvasTexture(c);
-    const sprite = new T.Sprite(
-      new T.SpriteMaterial({ map: texture, depthTest: false }),
-    );
-    sprite.scale.set(4.6, 0.86, 1);
-    sprite.userData = { canvas: c, context: ctx, texture };
-    return sprite;
-  }
-  const core = mesh(new T.CylinderGeometry(1.3, 1.8, 3, 12), cyan, true);
-  core.position.y = 1.5;
-  scene.add(core);
-  const coreLabel = label("CME / EXCHANGE");
-  coreLabel.position.set(0, 4, 0);
-  scene.add(coreLabel);
-  targets.push(core);
-  core.userData.id = "exchange";
-  function block(x, z, h, id, title, color = cyan) {
-    const group = new T.Group();
-    group.position.set(x, 0, z);
-    scene.add(group);
-    const base = mesh(new T.BoxGeometry(3, 0.22, 3), 0x1a344c);
-    base.position.y = 0.15;
-    group.add(base);
-    const body = mesh(new T.BoxGeometry(1.45, h, 1.45), 0x15283f);
-    body.position.y = h / 2 + 0.3;
-    body.userData.id = id;
-    group.add(body);
-    targets.push(body);
-    const edge = new T.LineSegments(
-      new T.EdgesGeometry(body.geometry),
-      new T.LineBasicMaterial({ color }),
-    );
-    body.add(edge);
-    // A single instanced mesh per tower renders hundreds of illuminated windows.
-    const windows = new T.InstancedMesh(
-      new T.BoxGeometry(0.075, 0.11, 0.015),
-      new T.MeshBasicMaterial({ color }),
-      4 * 8 * 14,
-    );
-    let n = 0;
-    const dummy = new T.Object3D();
-    for (let side = 0; side < 4; side++)
-      for (let row = 0; row < 14; row++)
-        for (let col = 0; col < 8; col++) {
-          dummy.position.set(
-            (col - 3.5) * 0.15,
-            ((row + 0.5) / 14) * h - h / 2,
-            0.733,
-          );
-          dummy.rotation.set(0, 0, 0);
-          if (side === 1) {
-            dummy.position.z = -0.733;
-          }
-          if (side >= 2) {
-            const a = dummy.position.x;
-            dummy.position.x = side === 2 ? 0.733 : -0.733;
-            dummy.position.z = a;
-            dummy.rotation.y = Math.PI / 2;
-          }
-          dummy.updateMatrix();
-          windows.setMatrixAt(n++, dummy.matrix);
-        }
-    body.add(windows);
-    const beam = new T.Mesh(
-      new T.CylinderGeometry(0.065, 0.24, 12, 12),
-      new T.MeshBasicMaterial({
+  function lines(points, color, parent = scene, opacity = 0.4) {
+    const line = new T.Line(
+      new T.BufferGeometry().setFromPoints(points),
+      new T.LineBasicMaterial({
         color,
         transparent: true,
-        opacity: 0.32,
-        depthWrite: false,
+        opacity,
+        toneMapped: false,
       }),
     );
-    beam.position.y = h + 6;
-    group.add(beam);
-    const cap = mesh(new T.TorusGeometry(1, 0.025, 8, 48), color, true);
-    cap.rotation.x = Math.PI / 2;
-    cap.position.y = h + 0.4;
-    group.add(cap);
-    const tag = label(title, color);
-    tag.position.y = h + 2;
-    group.add(tag);
-    return { group, body, beam, cap, tag, h, color };
+    parent.add(line);
+    return line;
   }
-  STRATEGIES.forEach((s, i) => {
-    const a = (i / 5) * Math.PI * 2 - 0.3;
-    towers.set(
-      s.id,
-      block(
-        Math.cos(a) * 7.4,
-        Math.sin(a) * 7.4,
-        3.5 + i * 0.45,
-        s.id,
-        s.name.toUpperCase(),
+  function edges(mesh, color = 0x6179b8) {
+    mesh.add(
+      new T.LineSegments(
+        new T.EdgesGeometry(mesh.geometry),
+        new T.LineBasicMaterial({ color, transparent: true, opacity: 0.4 }),
       ),
     );
+  }
+  function canvasSprite(width, height, scale) {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    const texture = new T.CanvasTexture(canvas);
+    texture.colorSpace = T.SRGBColorSpace;
+    const sprite = new T.Sprite(
+      new T.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthTest: true,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    sprite.scale.set(scale, (scale * height) / width, 1);
+    sprite.userData = { canvas, context, texture };
+    return sprite;
+  }
+  function textPanel(sprite, title, rows, color = "#64eeff", history = []) {
+    const { canvas: c, context: x, texture } = sprite.userData;
+    x.clearRect(0, 0, c.width, c.height);
+    x.fillStyle = "rgba(3,7,27,.90)";
+    x.fillRect(0, 0, c.width, c.height);
+    x.strokeStyle = color;
+    x.lineWidth = 2;
+    x.strokeRect(2, 2, c.width - 4, c.height - 4);
+    x.fillStyle = color;
+    x.fillRect(0, 0, 5, c.height);
+    x.textAlign = "left";
+    x.font = "bold 21px monospace";
+    x.fillText(title.toUpperCase().slice(0, 30), 20, 34);
+    x.fillStyle = "#e5efff";
+    rows.forEach((row, i) => {
+      x.font = i === 0 ? "bold 30px monospace" : "17px monospace";
+      x.fillText(row, 20, 76 + i * 26);
+    });
+    if (history.length > 1) {
+      const low = Math.min(...history),
+        high = Math.max(...history),
+        range = high - low || 1;
+      x.strokeStyle = color;
+      x.lineWidth = 2;
+      x.beginPath();
+      history.forEach((v, i) => {
+        const px = 20 + (i / (history.length - 1)) * (c.width - 40),
+          py = c.height - 22 - ((v - low) / range) * 45;
+        i ? x.lineTo(px, py) : x.moveTo(px, py);
+      });
+      x.stroke();
+    }
+    texture.needsUpdate = true;
+  }
+  function billboard(title, rows, position, scale = 4.4, color = "#64eeff") {
+    const s = canvasSprite(440, 156, scale);
+    textPanel(s, title, rows, color);
+    s.position.copy(position);
+    scene.add(s);
+    return s;
+  }
+  // Reusable illuminated facade. Instancing keeps the surrounding skyline to one draw call.
+  const facade = new T.ShaderMaterial({
+    toneMapped: false,
+    vertexShader: `
+    attribute vec3 aSize; varying vec2 vUv; varying vec3 vSize; varying vec3 vNormal;
+    void main(){vUv=uv;vSize=aSize;vNormal=normal;vec4 p=vec4(position,1.0);
+    #ifdef USE_INSTANCING
+      p=instanceMatrix*p;
+    #endif
+    gl_Position=projectionMatrix*modelViewMatrix*p;}`,
+    fragmentShader: `
+    varying vec2 vUv; varying vec3 vSize; varying vec3 vNormal;
+    void main(){bool roof=abs(vNormal.y)>.5;float faceWidth=abs(vNormal.z)>.5?vSize.x:vSize.z;
+      vec2 cells=vUv*vec2(faceWidth*7.0,vSize.y*5.0);vec2 grid=fract(cells);
+      float seed=fract(sin(dot(floor(cells),vec2(12.9898,78.233)))*43758.5453);
+      float lit=step(.20,grid.x)*step(grid.x,.70)*step(.2,grid.y)*step(grid.y,.62)*step(.27,seed);
+      vec3 base=vec3(.015,.025,.10);vec3 window=mix(vec3(.24,.38,.85),vec3(.75,.85,1.0),seed);
+      vec2 edge=min(vUv,1.0-vUv);float trim=1.0-step(.012,min(edge.x,edge.y));
+      gl_FragColor=vec4(roof?vec3(.035,.035,.12):base+window*lit*.8+vec3(.10,.17,.40)*trim,1.0);}`,
   });
-  const nodes = {
-    oms: new T.Vector3(-4, 1, 10),
-    risk: new T.Vector3(0, 1, 10),
-    gateway: new T.Vector3(4, 1, 10),
-    exchange: new T.Vector3(0, 3, 0),
-  };
-  Object.entries(nodes)
-    .filter(([id]) => id !== "exchange")
-    .forEach(([id, p]) => block(p.x, p.z, 1.2, id, id.toUpperCase(), 0x9b9aff));
-  const feedA = block(-6, -9, 1.5, "A", "MDP / FEED A"),
-    feedB = block(-2, -10, 1.5, "B", "MDP / FEED B");
-  function link(a, b, color) {
+  function urbanBuildings(specs, parent = scene) {
+    const geometry = new T.BoxGeometry(1, 1, 1);
+    geometry.setAttribute(
+      "aSize",
+      new T.InstancedBufferAttribute(
+        new Float32Array(specs.flatMap((b) => [b.width, b.height, b.depth])),
+        3,
+      ),
+    );
+    const mesh = new T.InstancedMesh(geometry, facade, specs.length);
+    const dummy = new T.Object3D();
+    specs.forEach((b, i) => {
+      dummy.position.set(b.x, b.y + b.height / 2, b.z);
+      dummy.scale.set(b.width, b.height, b.depth);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    });
+    mesh.computeBoundingSphere();
+    parent.add(mesh);
+    return mesh;
+  }
+  urbanBuildings(layout.buildings);
+  // Layered floating foundation, exposed ribs, energy decks and perimeter promenades.
+  const deck = add(
+    new T.CylinderGeometry(17, 16.6, 0.8, 128),
+    material(0x161347, 0.22),
+    new T.Vector3(0, -0.45, 0),
+  );
+  add(
+    new T.CylinderGeometry(15.7, 13.3, 1.4, 64),
+    material(0x080c24),
+    new T.Vector3(0, -1.55, 0),
+  );
+  add(
+    new T.CylinderGeometry(13.3, 7, 1.6, 64),
+    material(0x0e0b28),
+    new T.Vector3(0, -3, 0),
+  );
+  add(
+    new T.CylinderGeometry(7, 2.2, 1, 32),
+    material(0x131339),
+    new T.Vector3(0, -4.2, 0),
+  );
+  [17, 16.4, 15.4, 8, 4.1].forEach((r, i) =>
+    ring(r, 0.05 + i * 0.025, i % 2 ? violet : cyan),
+  );
+  ring(16.1, -1.1, violet);
+  ring(13.1, -2.9, cyan);
+  ring(7, -3.8, violet);
+  ring(2.25, -4.8, cyan);
+  for (let i = 0; i < 64; i++) {
+    const a = (i / 64) * Math.PI * 2;
+    const rim = add(
+      new T.BoxGeometry(0.19, 0.14, 0.65),
+      neon(i % 4 ? 0x628dff : 0xaef5ff),
+      new T.Vector3(Math.cos(a) * 16.75, 0.16, Math.sin(a) * 16.75),
+    );
+    rim.rotation.y = -a;
+    const rib = add(
+      new T.BoxGeometry(0.13, 1.2, 0.3),
+      material(0x344576),
+      new T.Vector3(Math.cos(a) * 15.2, -1.7, Math.sin(a) * 15.2),
+    );
+    rib.rotation.y = -a;
+  }
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    lines(
+      [
+        new T.Vector3(Math.cos(a) * 4, 0.035, Math.sin(a) * 4),
+        new T.Vector3(Math.cos(a) * 16, 0.035, Math.sin(a) * 16),
+      ],
+      0x6272f8,
+      scene,
+      0.45,
+    );
+  }
+  const promenade = ring(16.7, 2.1, 0x7f99ff);
+  ring(16.7, 1.8, 0x4250a0);
+  for (let i = 0; i < 32; i++) {
+    const a = (i / 32) * Math.PI * 2;
+    add(
+      new T.CylinderGeometry(0.025, 0.025, 2, 4),
+      material(0x34436e),
+      new T.Vector3(Math.cos(a) * 16.7, 1, Math.sin(a) * 16.7),
+    );
+  }
+  // Central exchange: a luminous vault under an orbital armillary.
+  const coreGroup = new T.Group();
+  scene.add(coreGroup);
+  const core = add(
+    new T.CylinderGeometry(2.2, 2.6, 1.8, 20),
+    material(0x53452a, 0.3),
+    new T.Vector3(0, 0.9, 0),
+    coreGroup,
+  );
+  edges(core, gold);
+  core.userData.id = "exchange";
+  targets.push(core);
+  add(
+    new T.SphereGeometry(1.95, 40, 24, 0, Math.PI * 2, 0, Math.PI / 2),
+    neon(0xffe6b8),
+    new T.Vector3(0, 1.9, 0),
+    coreGroup,
+  );
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2;
+    add(
+      new T.BoxGeometry(0.065, 1.8, 0.08),
+      neon(gold),
+      new T.Vector3(Math.cos(a) * 2.23, 0.9, Math.sin(a) * 2.23),
+      coreGroup,
+    );
+  }
+  ring(2.6, 0.08, gold);
+  ring(2.8, 0.2, cyan);
+  const vaultPanel = billboard(
+    "EXCHANGE VAULT",
+    ["Waiting for telemetry", "CME / read-only observer"],
+    new T.Vector3(0, 5, 1),
+    5.4,
+    "#ffdda0",
+  );
+  const orbital = new T.Group();
+  orbital.position.y = 6.3;
+  scene.add(orbital);
+  for (let i = 0; i < 3; i++) {
+    const r = ring(1.4 + i * 0.2, 0, i === 1 ? gold : cyan, orbital);
+    r.rotation.x = 0.3 + i * 0.75;
+    r.rotation.z = i * 0.8;
+  }
+  rings.push({ object: orbital, speed: 0.3, axis: "y" });
+  // Each strategy is a tiered skyscraper and its own compact city block.
+  function landmark(spec, id, name, index) {
+    const group = new T.Group();
+    group.position.set(spec.x, 0.22, spec.z);
+    scene.add(group);
+    add(
+      new T.BoxGeometry(5.5, 0.25, 5.5),
+      material(0x111a43, 0.2),
+      new T.Vector3(0, 0, 0),
+      group,
+    );
+    const pad = ring(2.9, 0.16, index === 2 ? pink : cyan, group);
+    pad.rotation.z = 0.15;
+    const skyline = new T.Group();
+    group.add(skyline);
+    const sizes = [
+      { w: 2.05, h: 3.2, d: 1.9, y: 1.85 },
+      { w: 1.55, h: 2.8, d: 1.4, y: 4.85 },
+      { w: 0.95, h: 2.4, d: 0.85, y: 7.45 },
+    ];
+    const bodies = [];
+    sizes.forEach((tier, i) => {
+      const m = urbanBuildings(
+        [
+          {
+            x: 0,
+            z: 0,
+            y: tier.y - tier.h / 2,
+            width: tier.w,
+            height: tier.h,
+            depth: tier.d,
+          },
+        ],
+        skyline,
+      );
+      m.userData.id = id;
+      targets.push(m);
+      bodies.push(m);
+      const lip = add(
+        new T.BoxGeometry(tier.w + 0.25, 0.12, tier.d + 0.25),
+        material(0x2e3364, 0.3),
+        new T.Vector3(0, tier.y + tier.h / 2, 0),
+        skyline,
+      );
+      edges(lip, index === 2 ? pink : cyan);
+    });
+    add(
+      new T.CylinderGeometry(0.055, 0.1, 3, 8),
+      neon(cyan),
+      new T.Vector3(0, 10, 0),
+      skyline,
+    );
+    const crown = new T.Group();
+    crown.position.y = 9;
+    group.add(crown);
+    for (let i = 0; i < 3; i++) {
+      const r = ring(
+        0.7 + i * 0.24,
+        i * 0.32,
+        index === 2 ? pink : cyan,
+        crown,
+        0.02,
+      );
+      r.rotation.z = 0.1 * i;
+      rings.push({
+        object: r,
+        speed: (i % 2 ? -1 : 1) * (0.3 + i * 0.1),
+        axis: "z",
+      });
+    }
+    const beamGroup = new T.Group();
+    beamGroup.position.y = 9.8;
+    group.add(beamGroup);
+    const beam = add(
+      new T.CylinderGeometry(0.07, 0.16, 21, 12),
+      neon(cyan, 0.6),
+      new T.Vector3(0, 10.5, 0),
+      beamGroup,
+    );
+    add(
+      new T.CylinderGeometry(0.23, 0.35, 21, 12),
+      neon(cyan, 0.055),
+      new T.Vector3(0, 10.5, 0),
+      beamGroup,
+    );
+    const tag = canvasSprite(440, 210, 4.7);
+    tag.position.set(0, 12.5, 0);
+    group.add(tag);
+    textPanel(tag, name, ["Waiting for data", "No measured activity"]);
+    const badge = billboard(
+      STRATEGIES[index].symbol,
+      ["STRATEGY NODE " + (index + 1)],
+      new T.Vector3(spec.x, 1, spec.z + 2.7),
+      2.3,
+    );
+    const selection = ring(3.1, 0.3, gold, group, 0.06);
+    selection.visible = false;
+    return {
+      group,
+      skyline,
+      crown,
+      beamGroup,
+      beam,
+      tag,
+      badge,
+      selection,
+      history: [],
+      lastSeq: -1,
+      baseHeight: spec.height,
+      index,
+    };
+  }
+  STRATEGIES.forEach((s, i) =>
+    towers.set(s.id, landmark(layout.landmarks[i], s.id, s.name, i)),
+  );
+  // Separate floating feed/execution islands with luminous suspension bridges.
+  const feedBeams = new Map(),
+    nodes = {
+      exchange: new T.Vector3(0, 3, 0),
+      oms: new T.Vector3(-5, 2, 13),
+      risk: new T.Vector3(0, 2, 14),
+      gateway: new T.Vector3(21, 2, 9),
+    };
+  function bridge(a, b, color) {
+    const midpoint = a.clone().lerp(b, 0.5);
+    midpoint.y -= 1;
+    const curve = new T.QuadraticBezierCurve3(a, midpoint, b);
+    const path = curve.getPoints(60);
+    lines(path, color, scene, 0.6);
+    const second = path.map((p) => p.clone().add(new T.Vector3(0, -0.35, 0)));
+    lines(second, violet, scene, 0.35);
+    return curve;
+  }
+  for (const satellite of layout.satellites) {
+    const { x, z, y, r, id } = satellite;
+    const group = new T.Group();
+    group.position.set(x, y, z);
+    scene.add(group);
+    add(
+      new T.CylinderGeometry(r, r * 0.85, 0.7, 48),
+      material(0x161341, 0.25),
+      new T.Vector3(0, -0.35, 0),
+      group,
+    );
+    add(
+      new T.CylinderGeometry(r * 0.82, 0.7, 1.5, 32),
+      material(0x11132e),
+      new T.Vector3(0, -1.4, 0),
+      group,
+    );
+    ring(r, 0.02, cyan, group);
+    ring(r - 0.2, 0.04, violet, group);
+    const antenna = add(
+      new T.CylinderGeometry(0.25, 0.45, 5, 12),
+      material(0x2d3764, 0.3),
+      new T.Vector3(0, 2.5, 0),
+      group,
+    );
+    antenna.userData.id = id;
+    targets.push(antenna);
+    const halo = ring(1, 4.5, cyan, group);
+    rings.push({ object: halo, speed: 0.3, axis: "z" });
+    const beam = add(
+      new T.CylinderGeometry(0.04, 0.12, 13, 8),
+      neon(cyan, 0.4),
+      new T.Vector3(0, 11, 0),
+      group,
+    );
+    feedBeams.set(id, beam);
+    const tag = billboard(
+      id === "gateway" ? "ORDER GATEWAY" : "MDP / FEED " + id,
+      ["Awaiting snapshot"],
+      new T.Vector3(x, y + 7, z),
+      4.2,
+    );
+    beacons.push({ id, tag });
+    bridge(
+      new T.Vector3(x, y + 0.3, z),
+      new T.Vector3(x * 0.66, 0.2, z * 0.66),
+      cyan,
+    );
+    if (id !== "gateway") nodes[id] = new T.Vector3(x, y + 4, z);
+  }
+  for (const [id, p] of Object.entries(nodes).filter(
+    ([id]) => id === "oms" || id === "risk",
+  )) {
+    const body = add(
+      new T.CylinderGeometry(0.8, 1.3, 2, 6),
+      material(0x29234b, 0.4),
+      p.clone().add(new T.Vector3(0, -1, 0)),
+    );
+    body.userData.id = id;
+    targets.push(body);
+
+    billboard(
+      id,
+      ["EXECUTION PIPELINE"],
+      p.clone().add(new T.Vector3(0, 2, 0)),
+      2.8,
+      "#b8a4ff",
+    );
+  }
+  // Architectural routes glow constantly; moving order trails exist only for observed events.
+  function route(a, b, color, lift = 5) {
     const curve = new T.QuadraticBezierCurve3(
       a,
       a
         .clone()
         .lerp(b, 0.5)
-        .add(new T.Vector3(0, 3, 0)),
+        .add(new T.Vector3(0, lift, 0)),
       b,
     );
-    const line = new T.Line(
-      new T.BufferGeometry().setFromPoints(curve.getPoints(60)),
-      new T.LineBasicMaterial({ color, transparent: true, opacity: 0.24 }),
-    );
-    scene.add(line);
+    lines(curve.getPoints(72), color, scene, 0.2);
     return curve;
   }
   towers.forEach((t) =>
-    link(t.group.position.clone().add(new T.Vector3(0, 2, 0)), nodes.oms, cyan),
+    route(
+      t.group.position.clone().add(new T.Vector3(0, 5, 0)),
+      nodes.exchange,
+      cyan,
+      7,
+    ),
   );
-  link(nodes.oms, nodes.risk, cyan);
-  link(nodes.risk, nodes.gateway, cyan);
-  link(nodes.gateway, nodes.exchange, cyan);
-  link(new T.Vector3(-6, 2, -9), new T.Vector3(0, 3, 0), cyan);
-  link(new T.Vector3(-2, 2, -10), new T.Vector3(0, 3, 0), cyan);
-  let focus = null,
-    disposed = false;
+  route(nodes.A, nodes.exchange, cyan, 6);
+  route(nodes.B, nodes.exchange, violet, 8);
+  route(nodes.oms, nodes.risk, violet, 2);
+  route(nodes.risk, nodes.gateway, violet, 5);
+  // Decorative orbital traffic is intentionally distinct from telemetry-driven order effects.
+  for (let i = 0; i < 7; i++) {
+    const points = [];
+    for (let j = 0; j <= 140; j++) {
+      const a = (j / 140) * Math.PI * 2;
+      points.push(
+        new T.Vector3(
+          Math.cos(a) * (18 + i * 0.8),
+          3 + i * 0.55,
+          Math.sin(a) * (18 + i * 0.8),
+        ),
+      );
+    }
+    const curve = new T.CatmullRomCurve3(points, true);
+    lines(points, i % 2 ? violet : cyan, scene, 0.07);
+    const bead = add(
+      new T.SphereGeometry(0.055, 6, 6),
+      neon(i % 2 ? violet : cyan),
+    );
+    flows.push({ curve, bead, phase: i * 0.137, speed: 0.012 + i * 0.002 });
+  }
+  // Nebula dust and distant starfield, rendered as two point clouds.
+  const dotCanvas = document.createElement("canvas");
+  dotCanvas.width = 32;
+  dotCanvas.height = 32;
+  const ctx = dotCanvas.getContext("2d");
+  const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  gradient.addColorStop(0, "white");
+  gradient.addColorStop(0.18, "rgba(150,200,255,.8)");
+  gradient.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 32, 32);
+  const dotTexture = new T.CanvasTexture(dotCanvas);
+  const stars = new Float32Array(1800 * 3);
+  let rng = 17;
+  const random = () =>
+    (rng = (Math.imul(rng, 1664525) + 1013904223) >>> 0) / 4294967296;
+  for (let i = 0; i < 1800; i++) {
+    const a = random() * Math.PI * 2,
+      r = 65 + random() * 110;
+    stars[i * 3] = Math.cos(a) * r;
+    stars[i * 3 + 1] = (random() - 0.35) * 95;
+    stars[i * 3 + 2] = Math.sin(a) * r;
+  }
+  const starGeometry = new T.BufferGeometry();
+  starGeometry.setAttribute("position", new T.BufferAttribute(stars, 3));
+  const starfield = new T.Points(
+    starGeometry,
+    new T.PointsMaterial({
+      size: 0.22,
+      map: dotTexture,
+      color: 0xb8bcff,
+      transparent: true,
+      opacity: 0.8,
+      depthWrite: false,
+      blending: T.AdditiveBlending,
+      toneMapped: false,
+    }),
+  );
+  scene.add(starfield);
+  const dust = new Float32Array(700 * 3);
+  for (let i = 0; i < 700; i++) {
+    dust[i * 3] = (random() - 0.5) * 75;
+    dust[i * 3 + 1] = -9 + random() * 45;
+    dust[i * 3 + 2] = (random() - 0.5) * 75;
+  }
+  const dustGeometry = new T.BufferGeometry();
+  dustGeometry.setAttribute("position", new T.BufferAttribute(dust, 3));
+  const particles = new T.Points(
+    dustGeometry,
+    new T.PointsMaterial({
+      size: 0.075,
+      map: dotTexture,
+      color: 0x728aff,
+      transparent: true,
+      opacity: 0.6,
+      depthWrite: false,
+      blending: T.AdditiveBlending,
+      toneMapped: false,
+    }),
+  );
+  scene.add(particles);
   const ray = new T.Raycaster(),
-    mouse = new T.Vector2();
+    pointer = new T.Vector2();
   let down;
-  renderer.domElement.addEventListener(
-    "pointerdown",
-    (e) => (down = [e.clientX, e.clientY]),
-  );
+  renderer.domElement.addEventListener("pointerdown", (e) => {
+    down = [e.clientX, e.clientY];
+    tour = false;
+  });
   renderer.domElement.addEventListener("pointerup", (e) => {
     if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5)
       return;
     const rect = renderer.domElement.getBoundingClientRect();
-    mouse.set(
+    pointer.set(
       ((e.clientX - rect.left) / rect.width) * 2 - 1,
       (-(e.clientY - rect.top) / rect.height) * 2 + 1,
     );
-    ray.setFromCamera(mouse, camera);
+    ray.setFromCamera(pointer, camera);
+    const orderMeshes = effects.flatMap((e) => e.beads || []);
+    const orderHit = ray.intersectObjects(orderMeshes, false)[0];
+    if (orderHit) {
+      onOrder(orderHit.object.userData.orderId);
+      return;
+    }
     const hit = ray.intersectObjects(targets, false)[0];
     if (hit) onSelect(hit.object.userData.id);
   });
+  orbit.addEventListener("start", () => {
+    flight = null;
+    tour = false;
+    following = null;
+    followQueue = [];
+  });
   function clearEffects() {
     for (const e of effects) {
-      scene.remove(e.mesh);
-      e.mesh.geometry.dispose();
-      e.mesh.material.dispose();
+      scene.remove(e.group);
+      e.group.traverse((o) => {
+        o.geometry?.dispose();
+        o.material?.dispose();
+      });
     }
     effects.length = 0;
+    for (const t of towers.values()) t.history = [];
   }
-  function update(frame) {
+  function update(frame, health = {}) {
+    lastFrame = frame;
+    let total = 0;
     for (const s of frame.strategies) {
       const t = towers.get(s.id);
-      const h = 3 + Math.min(Math.abs(s.pnl) / 1600, 4);
-      t.body.scale.y = h / t.h;
-      t.body.position.y = h / 2 + 0.3;
-      t.cap.position.y = h + 0.4;
-      t.beam.position.y = h + 6;
-      t.tag.position.y = h + 2;
-      const data = t.tag.userData;
-      if (t.lastPnl !== s.pnl || t.lastPosition !== s.position) {
-        const ctx = data.context;
-        ctx.fillStyle = "#071624";
-        ctx.fillRect(0, 0, 512, 96);
-        ctx.strokeStyle = "#58e8ff";
-        ctx.strokeRect(2, 2, 508, 92);
-        ctx.fillStyle = "#d9f7ff";
-        ctx.font = "bold 19px monospace";
-        ctx.fillText(s.name.toUpperCase(), 256, 32);
-        ctx.font = "24px monospace";
-        ctx.fillStyle = s.pnl < 0 ? "#ff759f" : "#62efcf";
-        ctx.fillText("$" + s.pnl.toFixed(0) + "   POS " + s.position, 256, 70);
-        data.texture.needsUpdate = true;
-        t.lastPnl = s.pnl;
-        t.lastPosition = s.position;
-      }
-      const color = s.state === "DEGRADED" ? amber : s.pnl < 0 ? pink : cyan;
+      if (!t) continue;
+      total += s.pnl;
+      const height = 7.5 + Math.min(Math.abs(s.pnl) / 2500, 4);
+      t.skyline.scale.y = height / 9.5;
+      t.crown.position.y = height;
+      t.beamGroup.position.y = height + 0.7;
+      t.tag.position.y = height + 3;
+      const color =
+        (health[s.id] && health[s.id].state !== "HEALTHY"
+          ? health[s.id].color
+          : null) ??
+        (s.state === "DEGRADED"
+          ? 0xffbb55
+          : s.state === "STOPPED" || s.state === "IDLE"
+            ? 0x6c7192
+            : s.pnl < 0
+              ? pink
+              : cyan);
       t.beam.material.color.setHex(color);
-      t.cap.material.color.setHex(color);
+      t.beamGroup.children[1].material.color.setHex(color);
+      if (t.lastSeq !== frame.seq) {
+        t.history.push(s.pnl);
+        if (t.history.length > 50) t.history.shift();
+        t.lastSeq = frame.seq;
+      }
+      textPanel(
+        t.tag,
+        s.name,
+        [
+          `${s.pnl < 0 ? "-" : "+"}$${Math.abs(s.pnl).toLocaleString("en-US", { maximumFractionDigits: 0 })}`,
+          `${s.symbol} · POS ${s.position} · ${health[s.id]?.state ?? s.state}`,
+          `UPD ${(health[s.id]?.updated ?? frame.time).toFixed(1)}s · ORD ${s.orders}`,
+        ],
+        health[s.id] && health[s.id].state !== "HEALTHY"
+          ? "#" + health[s.id].color.toString(16).padStart(6, "0")
+          : s.pnl < 0
+            ? "#ff69b7"
+            : "#67ffdd",
+        t.history,
+      );
     }
-    [feedA, feedB].forEach((t, i) =>
-      t.beam.material.color.setHex(
-        frame.feeds.find((f) => f.id === (i ? "B" : "A")).state === "HEALTHY"
-          ? cyan
-          : amber,
-      ),
+    textPanel(
+      vaultPanel,
+      "EXCHANGE VAULT",
+      [
+        `${total < 0 ? "-" : "+"}$${Math.abs(total).toLocaleString("en-US", { maximumFractionDigits: 0 })}`,
+        `${frame.source?.toUpperCase() || "IMPORTED"} / ${frame.time.toFixed(1)}s`,
+      ],
+      "#ffdda0",
     );
+    for (const b of beacons) {
+      const f = frame.feeds.find((f) => f.id === b.id);
+      if (f) {
+        textPanel(
+          b.tag,
+          "MDP / FEED " + f.id,
+          [
+            health[f.id]?.state ?? f.state,
+            `SEQ ${f.seq}`,
+            `UPD ${(health[f.id]?.updated ?? frame.time).toFixed(1)}s / GAP ${f.gaps}`,
+          ],
+          health[f.id]
+            ? "#" + health[f.id].color.toString(16).padStart(6, "0")
+            : f.state === "HEALTHY"
+              ? "#64eeff"
+              : "#ffbb55",
+        );
+        feedBeams
+          .get(b.id)
+          .material.color.setHex(
+            health[f.id]?.color ?? (f.state === "HEALTHY" ? cyan : 0xffb655),
+          );
+      }
+    }
   }
-  function emit(event) {
-    if (effects.length >= 80) return;
-    const t = towers.get(event.strategyId);
-    if (!t) return;
-    let start, end;
-    if (event.type === "ORDER_CREATED") {
-      start = t.group.position.clone().add(new T.Vector3(0, 3, 0));
-      end = nodes.oms;
-    } else if (event.type === "RISK_PASSED" || event.type === "RISK_REJECTED") {
-      start = nodes.oms;
-      end = nodes.risk;
-    } else if (event.type === "ORDER_SENT") {
-      start = nodes.risk;
-      end = nodes.gateway;
-    } else if (event.type === "ORDER_ACK") {
-      start = nodes.gateway;
-      end = nodes.exchange;
-    } else if (event.type === "FILL") {
-      start = nodes.exchange;
-      end = t.group.position.clone().add(new T.Vector3(0, 3, 0));
-    } else return;
+  function pulse(position, color) {
+    const group = new T.Group();
+    group.position.copy(position);
+    scene.add(group);
+    const halo = ring(0.45, 0, color, group, 0.06);
+    const sphere = add(
+      new T.SphereGeometry(0.28, 12, 12),
+      neon(color, 0.8),
+      new T.Vector3(),
+      group,
+    );
+    effects.push({ group, halo, sphere, age: 0, duration: 1.2, pulse: true });
+  }
+  function emit(event, forceFollow = false) {
+    if (event.type === "RISK_WARNING" || event.type === "RISK_LIMIT_BREACHED") {
+      pulse(nodes.risk, 0xffaa44);
+      return;
+    }
+    if (effects.length >= 100) return;
+    if (event.type === "FEED_GAP" || event.type === "FEED_RECOVERED") {
+      const p = nodes[event.feed];
+      if (p) pulse(p, event.type === "FEED_GAP" ? 0xffaa44 : cyan);
+      return;
+    }
+    const tower = towers.get(event.strategyId);
+    if (!tower) return;
+    let a, b;
+    switch (event.type) {
+      case "ORDER_CREATED":
+        a = tower.group.position.clone().add(new T.Vector3(0, 6, 0));
+        b = nodes.oms;
+        break;
+      case "RISK_PASSED":
+      case "RISK_REJECTED":
+        a = nodes.oms;
+        b = nodes.risk;
+        break;
+      case "ORDER_SENT":
+        a = nodes.risk;
+        b = nodes.gateway;
+        break;
+      case "ORDER_ACK":
+        a = nodes.gateway;
+        b = nodes.exchange;
+        break;
+      case "FILL":
+        a = nodes.exchange;
+        b = tower.group.position.clone().add(new T.Vector3(0, 5, 0));
+        break;
+      default:
+        return;
+    }
     const color =
       event.type === "RISK_REJECTED"
         ? pink
         : event.type === "FILL"
-          ? 0x65ffd0
+          ? 0x73ffcc
           : cyan;
-    const m = mesh(new T.SphereGeometry(0.13, 8, 8), color, true);
-    scene.add(m);
+    const curve = new T.QuadraticBezierCurve3(
+      a,
+      a
+        .clone()
+        .lerp(b, 0.5)
+        .add(new T.Vector3(0, event.type === "FILL" ? 9 : 6, 0)),
+      b,
+    );
+    const group = new T.Group();
+    scene.add(group);
+    const beads = [];
+    for (let i = 0; i < 16; i++)
+      beads.push(
+        add(
+          new T.SphereGeometry(i === 0 ? 0.14 : 0.065, 6, 6),
+          neon(color, (1 - i / 16) * 0.9),
+          null,
+          group,
+        ),
+      );
+    for (const bead of beads) bead.userData.orderId = event.orderId;
     effects.push({
-      mesh: m,
-      curve: new T.QuadraticBezierCurve3(
-        start,
-        start
-          .clone()
-          .lerp(end, 0.5)
-          .add(new T.Vector3(0, 4, 0)),
-        end,
-      ),
+      orderId: event.orderId,
+      forced: forceFollow,
+      group,
+      curve,
+      beads,
       age: 0,
-      delay:
-        [
-          "ORDER_CREATED",
-          "RISK_PASSED",
-          "ORDER_SENT",
-          "ORDER_ACK",
-          "FILL",
-        ].indexOf(event.type) * 0.18,
+      duration: 1.8,
+      fill: event.type === "FILL",
+      color,
+      end: b,
     });
   }
   function resize() {
@@ -354,55 +863,150 @@ export function createCity(host, onSelect) {
   function animate() {
     if (disposed) return;
     raf = requestAnimationFrame(animate);
-    const dt = Math.min(clock.getDelta(), 0.05);
-    core.rotation.y += dt * 0.18;
-    if (focus) {
-      controls.target.lerp(focus, 0.06);
-      if (controls.target.distanceTo(focus) < 0.02) focus = null;
+    const dt = Math.min(clock.getDelta(), 0.05),
+      elapsed = clock.elapsedTime;
+    particles.rotation.y = elapsed * 0.007;
+    starfield.rotation.y = elapsed * 0.0007;
+    for (const r of rings) r.object.rotation[r.axis] += dt * r.speed;
+    for (const f of flows)
+      f.bead.position.copy(f.curve.getPoint((elapsed * f.speed + f.phase) % 1));
+    if (flight) {
+      flight.age += dt;
+      const p = Math.min(flight.age / 1.5, 1),
+        smooth = p * p * (3 - 2 * p);
+      camera.position.lerpVectors(flight.from, flight.to, smooth);
+      orbit.target.lerpVectors(flight.targetFrom, flight.targetTo, smooth);
+      if (p >= 1) flight = null;
     }
-    controls.update();
+    if (tour && !flight) {
+      const a = elapsed * 0.035;
+      camera.position.set(
+        Math.sin(a) * 48,
+        25 + Math.sin(elapsed * 0.13) * 2,
+        Math.cos(a) * 48,
+      );
+      orbit.target.set(0, 5, 0);
+    }
+    if (following) {
+      followTimer -= dt;
+      if (followQueue.length && followTimer <= 0) {
+        emit(followQueue.shift(), true);
+        followTimer = 1.95;
+      }
+      const candidates = effects.filter(
+        (e) => e.orderId === following && !e.pulse,
+      );
+      const active = candidates.find((e) => e.forced) || candidates.at(-1);
+      if (active) {
+        const p = active.curve.getPoint(
+          Math.min(active.age / active.duration, 1),
+        );
+        camera.position.lerp(p.clone().add(new T.Vector3(6, 5, 8)), 0.055);
+        orbit.target.lerp(p, 0.09);
+      }
+    }
+    orbit.update();
     for (let i = effects.length - 1; i >= 0; i--) {
       const e = effects[i];
       e.age += dt;
-      const t = (e.age - e.delay) / 1.3;
-      e.mesh.visible = t >= 0;
-      if (t >= 0) e.mesh.position.copy(e.curve.getPoint(Math.min(t, 1)));
-      if (t >= 1) {
-        scene.remove(e.mesh);
-        e.mesh.geometry.dispose();
-        e.mesh.material.dispose();
+      const p = e.age / e.duration;
+      if (e.pulse) {
+        e.halo.scale.setScalar(1 + p * 7);
+        e.halo.material.transparent = true;
+        e.halo.material.opacity = 1 - p;
+        e.sphere.scale.setScalar(1 + p * 2);
+        e.sphere.material.opacity = (1 - p) * 0.8;
+      } else
+        e.beads.forEach((m, j) => {
+          const t = Math.max(0, Math.min(1, p - j * 0.013));
+          m.position.copy(e.curve.getPoint(t));
+          m.visible = p - j * 0.013 >= 0;
+        });
+      if (p >= 1) {
+        if (e.fill && effects.length < 100) pulse(e.end, e.color);
+        scene.remove(e.group);
+        e.group.traverse((o) => {
+          o.geometry?.dispose();
+          o.material?.dispose();
+        });
         effects.splice(i, 1);
       }
     }
     composer.render();
   }
   animate();
+  function fly(position, target) {
+    tour = false;
+    following = null;
+    followQueue = [];
+    flight = {
+      from: camera.position.clone(),
+      to: position,
+      targetFrom: orbit.target.clone(),
+      targetTo: target,
+      age: 0,
+    };
+  }
   return {
     update,
     emit,
     clearEffects,
+    health(map) {
+      if (lastFrame) update(lastFrame, map);
+    },
+    followOrder(id, events) {
+      following = id;
+      followQueue = events.filter((e) => e.orderId === id);
+      followTimer = 0;
+      tour = false;
+      flight = null;
+    },
+    stopFollow() {
+      following = null;
+      followQueue = [];
+    },
     focus(id) {
+      for (const [key, t] of towers) t.selection.visible = key === id;
       const t = towers.get(id);
-      if (t) focus = t.group.position.clone().add(new T.Vector3(0, 3, 0));
+      if (t) {
+        const p = t.group.position.clone();
+        fly(
+          p.clone().add(new T.Vector3(9, 11, 14)),
+          p.clone().add(new T.Vector3(0, 5, 0)),
+        );
+      } else if (nodes[id])
+        fly(nodes[id].clone().add(new T.Vector3(10, 8, 13)), nodes[id]);
     },
     home() {
-      camera.position.set(26, 23, 32);
-      focus = new T.Vector3(0, 3, 0);
+      fly(homePosition.clone(), homeTarget.clone());
+    },
+    cinematic(value) {
+      bloom.strength = value ? 1.35 : 1.05;
+    },
+    tour(value) {
+      tour = value;
+      flight = null;
     },
     dispose() {
       disposed = true;
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
-      controls.dispose();
+      orbit.dispose();
       clearEffects();
+      const geometries = new Set(),
+        materials = new Set(),
+        textures = new Set();
       scene.traverse((o) => {
-        o.geometry?.dispose();
-        const materials = Array.isArray(o.material) ? o.material : [o.material];
-        materials.forEach((m) => {
-          m?.map?.dispose();
-          m?.dispose();
-        });
+        if (o.geometry) geometries.add(o.geometry);
+        for (const m of Array.isArray(o.material) ? o.material : [o.material])
+          if (m) {
+            materials.add(m);
+            if (m.map) textures.add(m.map);
+          }
       });
+      geometries.forEach((g) => g.dispose());
+      materials.forEach((m) => m.dispose());
+      textures.forEach((t) => t.dispose());
       composer.dispose();
       renderer.dispose();
       renderer.domElement.remove();

@@ -47,7 +47,16 @@ export function createApp({
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
     CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, label TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS frames (session_id TEXT NOT NULL REFERENCES sessions(id), seq INTEGER NOT NULL, time REAL NOT NULL, json TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY(session_id,seq));
-    CREATE INDEX IF NOT EXISTS frames_time ON frames(session_id,time);`);
+    CREATE INDEX IF NOT EXISTS frames_time ON frames(session_id,time);
+    CREATE TABLE IF NOT EXISTS events(session_id TEXT NOT NULL, seq INTEGER NOT NULL, frame_time REAL NOT NULL, event_id TEXT NOT NULL, type TEXT NOT NULL, order_id TEXT, qty REAL, json TEXT NOT NULL, PRIMARY KEY(session_id,seq,event_id));
+    CREATE INDEX IF NOT EXISTS events_order ON events(session_id,order_id);
+    CREATE INDEX IF NOT EXISTS events_type ON events(session_id,type);
+`);
+  if (db.prepare("PRAGMA user_version").get().user_version < 1) {
+    db.exec(
+      "BEGIN IMMEDIATE; INSERT OR IGNORE INTO events SELECT f.session_id,f.seq,f.time,json_extract(e.value,'$.id'),json_extract(e.value,'$.type'),json_extract(e.value,'$.orderId'),json_extract(e.value,'$.qty'),e.value FROM frames f,json_each(f.json,'$.events') e; PRAGMA user_version=1; COMMIT;",
+    );
+  }
   const latest = db.prepare(
     "SELECT seq,time,json,hash FROM frames WHERE session_id=? ORDER BY seq DESC LIMIT 1",
   );
@@ -176,6 +185,17 @@ export function createApp({
         now,
       );
       insert.run(sessionId, frame.seq, frame.time, serialized, hash);
+      for (const e of frame.events)
+        db.prepare("INSERT INTO events VALUES(?,?,?,?,?,?,?,?)").run(
+          sessionId,
+          frame.seq,
+          frame.time,
+          e.id,
+          e.type,
+          e.orderId ?? null,
+          e.qty ?? null,
+          JSON.stringify(e),
+        );
       db.prepare("UPDATE sessions SET updated=? WHERE id=?").run(
         now,
         sessionId,
@@ -205,6 +225,49 @@ export function createApp({
         });
       if (req.method === "GET" && url.pathname === "/api/sessions")
         return json(res, 200, { sessions: list.all() });
+      const eventMatch = url.pathname.match(
+        /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/(bookmarks|orders)$/,
+      );
+      if (req.method === "GET" && eventMatch) {
+        const id = eventMatch[1];
+        if (!sessionInfo.get(id))
+          return json(res, 404, { error: "Session not found" });
+        const decode = (row) => ({
+          ...JSON.parse(row.json),
+          frameTime: row.frame_time,
+          seq: row.seq,
+        });
+        if (eventMatch[2] === "orders") {
+          const orderId = url.searchParams.get("id");
+          if (!orderId || orderId.length > 120)
+            return json(res, 400, { error: "Order ID required" });
+          const rows = db
+            .prepare(
+              "SELECT * FROM events WHERE session_id=? AND order_id=? ORDER BY frame_time,seq LIMIT 2000",
+            )
+            .all(id, orderId);
+          return json(res, 200, { events: rows.map(decode) });
+        }
+        const after = Number(url.searchParams.get("after") ?? -1);
+        if (!Number.isSafeInteger(after))
+          return json(res, 400, { error: "Invalid bookmark cursor" });
+        const rows = db
+          .prepare(
+            "SELECT rowid AS cursor,* FROM events WHERE session_id=? AND rowid>? AND type IN ('FEED_GAP','FEED_RECOVERED','RISK_REJECTED','RISK_WARNING','RISK_LIMIT_BREACHED') ORDER BY rowid LIMIT 500",
+          )
+          .all(id, after);
+        const largest = db
+          .prepare(
+            "SELECT * FROM events WHERE session_id=? AND type='FILL' ORDER BY qty DESC,frame_time LIMIT 1",
+          )
+          .get(id);
+        return json(res, 200, {
+          events: rows.map(decode),
+          next: rows.at(-1)?.cursor ?? after,
+          hasMore: rows.length === 500,
+          largest: largest ? decode(largest) : null,
+        });
+      }
       const exportMatch = url.pathname.match(
         /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/export$/,
       );

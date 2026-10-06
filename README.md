@@ -1,9 +1,62 @@
-# Market Nexus v2
+# Market Nexus v4 — health, bookmarks and order follow
 
 A local, read-only 3D telemetry application with authenticated ingestion,
 persistent SQLite recordings, live WebSocket viewing, and paged historical
 playback. The server starts empty and never fabricates trades. Simulations and
 the C++ example are explicitly labeled. No exchange credentials are included.
+
+## New in v4
+
+- Health: gray idle/waiting, amber degraded, purple stale, red stopped/offline/
+  disconnected, cyan healthy. Negative P&L beams remain magenta when health is
+  otherwise normal. Towers and feed panels show their last snapshot time in
+  session seconds. Live stream receipt age is shown on screen. Paused recordings
+  do not turn stale just because wall-clock time passes.
+- Optional per-entity `updatedAt` is the producer's last observation time in
+  session seconds (0 <= updatedAt <= frame.time). Without it, freshness uses
+  the complete frame time; it does not claim to know when a strategy last changed.
+- Bookmarks: choose a feed gap/recovery, risk rejection/warning/limit breach, or
+  largest fill by contract quantity. Selection pauses replay and seeks to the
+  containing frame; choosing from live switches to stored playback. Largest
+  quantity is not largest financial notional across unlike instruments.
+- Stored sessions get an indexed event table, backfilled automatically once for
+  existing recordings. Bookmark queries are paginated, and order lookup covers
+  the stored session rather than the browser's current 500-frame window. The UI
+  loads up to 20,000 alert bookmarks and the largest fill for resource bounds.
+- Follow: click an animated order trail, click an order in the event stream, or
+  choose Follow this order in a strategy inspector. A panel shows the recorded
+  stage timestamps and time differences between observed stages. The camera
+  follows sequential illustrative stage animations; missing stages are never
+  invented. Camera timing is not execution latency. Drag to interrupt tracking;
+  Close / stop following dismisses the panel. Order lookup returns up to 2,000
+  event records; lifecycle duplicate IDs are suppressed in the displayed table.
+- New optional events RISK_WARNING/RISK_LIMIT_BREACHED carry id, strategyId,
+  time and message (max 240 characters); they do not need an order ID. Existing
+  C++ producers still work without emitting these optional warnings.
+
+## Visual redesign
+
+The default view is now the floating city: 233 surrounding buildings with
+procedurally illuminated facades, five tiered strategy skyscrapers, rotating
+crown rings, vertical beams, a luminous exchange vault and armillary, layered
+floating foundations, perimeter railings, three satellite islands, suspension
+bridges, nebula dust and stars. Holographic strategy panels show source P&L,
+position, orders/fills and a recent P&L sparkline. Feed labels show source health,
+packet sequence and gaps. Actual observed order events draw luminous comet
+trails; fills and feed events trigger expanding rings. Ambient orbital lights
+are decorative and do not represent orders.
+
+The city opens in cinematic mode. Click Engineering to reveal the full data
+panels and file/session controls; click Cinematic to return. Camera tour performs
+an orbit; dragging the scene stops it. Clicking a strategy flies toward its
+city block; Reset camera returns to overview. Updated UI keeps playback/session
+controls in a compact floating strip. No image assets or runtime CDN are needed.
+
+This is a new procedural interpretation of the supplied reference, not the
+creator's original meshes/assets or an exact pixel reproduction. Automated
+layout checks validate dense, deterministic geometry and clear landmark centers.
+Interactive browser rendering was unavailable; visual fidelity and GPU frame
+rate are not verified in this environment.
 
 ## Start — Windows, Linux or macOS
 

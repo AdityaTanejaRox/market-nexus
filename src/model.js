@@ -170,6 +170,14 @@ export function validateFrame(f) {
     (!Number.isSafeInteger(f.dropped) || f.dropped < 0)
   )
     throw Error("Invalid drop counter");
+  for (const entity of [...f.strategies, ...f.feeds])
+    if (
+      entity.updatedAt !== undefined &&
+      (!finite(entity.updatedAt) ||
+        entity.updatedAt < 0 ||
+        entity.updatedAt > f.time)
+    )
+      throw Error("Invalid entity update timestamp");
   const ids = new Set();
   for (const s of f.strategies) {
     if (
@@ -213,6 +221,8 @@ export function validateFrame(f) {
       ![
         "FEED_GAP",
         "FEED_RECOVERED",
+        "RISK_WARNING",
+        "RISK_LIMIT_BREACHED",
         "ORDER_CREATED",
         "RISK_REJECTED",
         "RISK_PASSED",
@@ -225,6 +235,13 @@ export function validateFrame(f) {
       throw Error("Invalid event");
     if (e.type.startsWith("FEED_")) {
       if (!["A", "B"].includes(e.feed)) throw Error("Invalid feed event");
+    } else if (["RISK_WARNING", "RISK_LIMIT_BREACHED"].includes(e.type)) {
+      if (
+        !ids.has(e.strategyId) ||
+        typeof e.message !== "string" ||
+        e.message.length > 240
+      )
+        throw Error("Invalid risk warning");
     } else if (
       !ids.has(e.strategyId) ||
       typeof e.orderId !== "string" ||

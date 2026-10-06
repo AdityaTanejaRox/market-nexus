@@ -1,4 +1,10 @@
 import "./style.css";
+import {
+  entityHealth,
+  bookmarks,
+  indexedEvents,
+  lifecycleRows,
+} from "./insights.js";
 import { createCity } from "./city.js";
 import {
   generateSession,
@@ -38,15 +44,55 @@ let ws = null,
   loadGeneration = 0,
   lastReceived = 0,
   loading = false;
-let city;
+let city,
+  connected = false,
+  activeOrder = null,
+  orderEvents = [],
+  bookmarkItems = [],
+  bookmarkGeneration = 0,
+  followGeneration = 0;
 try {
-  city = createCity($("world"), select);
+  city = createCity($("world"), select, followOrder);
+  city.cinematic(true);
 } catch (e) {
   $("notice").textContent = `WebGL unavailable: ${e.message}`;
-  city = { update() {}, emit() {}, clearEffects() {}, focus() {}, home() {} };
+  city = {
+    update() {},
+    emit() {},
+    clearEffects() {},
+    focus() {},
+    home() {},
+    cinematic() {},
+    tour() {},
+    health() {},
+    followOrder() {},
+    stopFollow() {},
+  };
 }
 const kv = (k, v) =>
   `<div class="kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`;
+function healthMap(now = performance.now()) {
+  return Object.fromEntries(
+    [...displayed.strategies, ...displayed.feeds].map((e) => [
+      e.id,
+      entityHealth(e, {
+        live: mode === "live",
+        connected,
+        lastReceived,
+        now,
+        frameTime: displayed.time,
+      }),
+    ]),
+  );
+}
+function refreshHealth() {
+  const map = healthMap();
+  city.health(map);
+  const states = [...new Set(Object.values(map).map((h) => h.state))];
+  $("health-status").textContent =
+    `${mode === "live" ? "LIVE HEALTH" : "RECORDED HEALTH"} · ${states.join(" / ")} · snapshot ${displayed.time.toFixed(3)}s${mode === "live" && lastReceived ? " · received " + Math.max(0, (performance.now() - lastReceived) / 1000).toFixed(1) + "s ago" : ""}`;
+  return map;
+}
 function select(id) {
   selected = id;
   city.focus(id);
@@ -78,6 +124,12 @@ function inspect() {
           .map((x) => kv(...x))
           .join("")
       : `<h3>${esc(selected.toUpperCase())}</h3><p class="muted">Read-only infrastructure observer. Animation durations do not represent measured execution latency.</p>`;
+  const h = healthMap()[selected];
+  if (h)
+    html +=
+      kv("Health", h.state) +
+      kv("Last snapshot (session s)", h.updated.toFixed(3)) +
+      kv("Age (s)", h.age === null ? "Unavailable" : h.age.toFixed(1));
   html += kv("Producer drops", displayed.dropped ?? "Not supplied");
   const order = log.find((e) => e.orderId && (!s || e.strategyId === s.id));
   if (order)
@@ -100,11 +152,16 @@ function inspect() {
       '<h2 style="margin-top:16px">Observed lifecycle</h2>' +
       stages.map((e) => kv(e.type, e.time.toFixed(6) + "s")).join("");
   }
+  if (order)
+    html += `<button class="follow-order" data-order="${esc(order.orderId)}">Follow this order</button>`;
   $("inspector").innerHTML = html;
 }
 function draw(frame, events = []) {
   displayed = frame;
-  city.update(frame);
+  $("scene-source").textContent =
+    `${(frame.source || "imported").toUpperCase()} / ${mode.toUpperCase()}`;
+  city.update(frame, healthMap());
+  refreshHealth();
   events.forEach((e) => city.emit(e));
   $("metrics").innerHTML = [
     ["Session P&L", money(frame.strategies.reduce((a, s) => a + s.pnl, 0))],
@@ -137,7 +194,7 @@ function draw(frame, events = []) {
     .slice(0, 12)
     .map(
       (e) =>
-        `<div class="event"><b>${esc(e.type)}</b><br>${esc(e.orderId || `Feed ${e.feed}`)} · ${e.time.toFixed(3)}s</div>`,
+        `<div class="event" ${e.orderId ? `data-order="${esc(e.orderId)}" tabindex="0" role="button"` : ""}><b>${esc(e.type)}</b><br>${esc(e.orderId || e.strategyId || `Feed ${e.feed}`)} · ${e.time.toFixed(3)}s</div>`,
     )
     .join("");
   $("latencies").innerHTML = frame.strategies
@@ -184,6 +241,7 @@ function controls() {
   $("connect").textContent = mode === "live" ? "Disconnect" : "Watch live";
 }
 function stopLive() {
+  connected = false;
   connectionGeneration++;
   clearTimeout(reconnect);
   if (ws) {
@@ -221,6 +279,7 @@ async function seek(t) {
   const generation = ++loadGeneration;
   loading = true;
   city.clearEffects();
+  city.stopFollow();
   try {
     if (
       mode === "recording" &&
@@ -254,6 +313,8 @@ async function seek(t) {
   }
 }
 function loadLocal(s) {
+  stopOrder();
+  bookmarkGeneration++;
   validateSession(s);
   stopLive();
   loadGeneration++;
@@ -267,6 +328,7 @@ function loadLocal(s) {
   $("connection").textContent =
     frames[0].source === "demo" ? "LOCAL DEMO" : "IMPORTED REPLAY";
   seek(frames[0].time);
+  loadBookmarks();
 }
 async function openRecording() {
   const item = $("sessions").sessionData?.find(
@@ -284,7 +346,9 @@ async function openRecording() {
   end = item.end_time;
   playing = false;
   $("connection").textContent = "STORED RECORDING";
+  stopOrder();
   await seek(item.start_time);
+  loadBookmarks();
 }
 function watch() {
   if (mode === "live") {
@@ -293,6 +357,7 @@ function watch() {
     frames = [];
     playing = false;
     seek(time);
+    loadBookmarks();
     return;
   }
   const item = $("sessions").sessionData?.find(
@@ -307,7 +372,10 @@ function watch() {
   loadGeneration++;
   loading = false;
   remote = item;
+  stopOrder();
   mode = "live";
+  lastReceived = 0;
+  connected = false;
   frames = [];
   log = [];
   playing = false;
@@ -320,6 +388,11 @@ function watch() {
       `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?session=${encodeURIComponent(item.id)}`,
     );
     ws = socket;
+    socket.onopen = () => {
+      if (generation !== connectionGeneration) return;
+      connected = true;
+      refreshHealth();
+    };
     let seq = -1,
       previousTime = -1;
     let first = true;
@@ -344,6 +417,13 @@ function watch() {
         log = [...f.events].reverse().concat(log).slice(0, 60);
         draw(f, first ? [] : f.events);
         first = false;
+        if (activeOrder) {
+          const additions = f.events.filter((e) => e.orderId === activeOrder);
+          if (additions.length) {
+            orderEvents.push(...additions);
+            renderOrder();
+          }
+        }
         $("connection").textContent =
           `CONNECTED / ${f.source?.toUpperCase() || "TELEMETRY"}`;
       } catch (err) {
@@ -352,6 +432,8 @@ function watch() {
     };
     socket.onclose = () => {
       if (generation !== connectionGeneration) return;
+      connected = false;
+      refreshHealth();
       $("connection").textContent = "DISCONNECTED / RETRYING";
       reconnect = setTimeout(connect, 2000);
     };
@@ -361,7 +443,136 @@ function watch() {
     };
   }
   connect();
+  loadBookmarks();
 }
+function stopOrder() {
+  followGeneration++;
+  activeOrder = null;
+  orderEvents = [];
+  city.stopFollow();
+  $("order-panel").hidden = true;
+}
+function renderOrder() {
+  if (!activeOrder) return;
+  const rows = lifecycleRows(orderEvents, activeOrder);
+  $("order-detail").innerHTML =
+    `<h3>ORDER ${esc(activeOrder)}</h3><p class="muted">Observed timestamps in session seconds. Camera animation is illustrative. Missing stages are not inferred.</p>` +
+    rows
+      .map(
+        (e) =>
+          kv(e.type, e.time.toFixed(6) + "s") +
+          kv(
+            "Since previous observed stage",
+            e.deltaUs === null ? "—" : e.deltaUs.toFixed(1) + " µs",
+          ),
+      )
+      .join("");
+}
+async function followOrder(id) {
+  const generation = ++followGeneration;
+  try {
+    let events;
+    if (remote) {
+      const data = await api(
+        `/api/sessions/${encodeURIComponent(remote.id)}/orders?id=${encodeURIComponent(id)}`,
+      );
+      events = data.events;
+    } else events = indexedEvents(local.frames);
+    if (generation !== followGeneration) return;
+    activeOrder = id;
+    orderEvents = events.filter(
+      (e) => e.orderId === id && (mode !== "live" || e.time <= displayed.time),
+    );
+    $("order-panel").hidden = false;
+    renderOrder();
+    city.followOrder(id, lifecycleRows(orderEvents, id));
+  } catch (e) {
+    $("notice").textContent = e.message;
+  }
+}
+async function loadBookmarks() {
+  const generation = ++bookmarkGeneration;
+  try {
+    let items;
+    if (remote) {
+      let events = [],
+        after = -1,
+        largest = null;
+      for (let pages = 0; pages < 40; pages++) {
+        const data = await api(
+          `/api/sessions/${encodeURIComponent(remote.id)}/bookmarks?after=${after}`,
+        );
+        if (generation !== bookmarkGeneration) return;
+        events.push(...data.events);
+        largest = data.largest;
+        after = data.next;
+        if (!data.hasMore) break;
+      }
+      items = bookmarks([...events, ...(largest ? [largest] : [])]);
+    } else items = bookmarks(indexedEvents(local.frames));
+    if (generation !== bookmarkGeneration) return;
+    bookmarkItems = items;
+    $("bookmarks").innerHTML =
+      '<option value="">Choose event</option>' +
+      items
+        .map(
+          (e, i) =>
+            `<option value="${i}">${esc(e.label)} · ${e.frameTime.toFixed(2)}s</option>`,
+        )
+        .join("");
+  } catch (e) {
+    $("notice").textContent = `Bookmarks unavailable: ${e.message}`;
+  }
+}
+$("bookmarks").onchange = async (e) => {
+  if (e.target.value === "") return;
+  const mark = bookmarkItems[Number(e.target.value)];
+  if (!mark) return;
+  if (mode === "live") {
+    stopLive();
+    mode = "recording";
+    frames = [];
+    const data = await api("/api/sessions");
+    remote = data.sessions.find((s) => s.id === remote.id) || remote;
+    end = remote.end_time;
+  }
+  playing = false;
+  await seek(mark.frameTime);
+  if (mark.orderId) await followOrder(mark.orderId);
+  else {
+    select(mark.feed || mark.strategyId || "risk");
+    $("order-panel").hidden = false;
+    $("order-detail").innerHTML =
+      `<h3>${esc(mark.label)}</h3>` +
+      kv("Event time", mark.time.toFixed(6) + "s") +
+      kv("Frame time", mark.frameTime.toFixed(6) + "s") +
+      (mark.message ? `<p>${esc(mark.message)}</p>` : "") +
+      (mark.expected !== undefined
+        ? kv("Expected sequence", mark.expected)
+        : "") +
+      (mark.received !== undefined
+        ? kv("Received sequence", mark.received)
+        : "");
+  }
+};
+$("stop-follow").onclick = stopOrder;
+$("inspector").onclick = (e) => {
+  const b = e.target.closest("[data-order]");
+  if (b) followOrder(b.dataset.order);
+};
+$("events").onclick = (e) => {
+  const b = e.target.closest("[data-order]");
+  if (b) followOrder(b.dataset.order);
+};
+$("events").onkeydown = (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    const b = e.target.closest("[data-order]");
+    if (b) {
+      e.preventDefault();
+      followOrder(b.dataset.order);
+    }
+  }
+};
 $("strategies").onclick = $("feeds").onclick = (e) => {
   const b = e.target.closest("[data-id]");
   if (b) select(b.dataset.id);
@@ -369,11 +580,19 @@ $("strategies").onclick = $("feeds").onclick = (e) => {
 $("home").onclick = () => city.home();
 function cinema() {
   document.body.classList.toggle("cinematic");
+  city.cinematic(document.body.classList.contains("cinematic"));
   $("cinematic").textContent = document.body.classList.contains("cinematic")
     ? "Engineering"
     : "Cinematic";
 }
 $("cinematic").onclick = cinema;
+let touring = false;
+$("tour").onclick = () => {
+  touring = !touring;
+  city.tour(touring);
+  $("tour").setAttribute("aria-pressed", String(touring));
+  $("tour").textContent = touring ? "Stop tour" : "Camera tour";
+};
 document.addEventListener("keydown", (e) => {
   if (e.key === "Tab" && e.target === document.body) {
     e.preventDefault();
@@ -488,5 +707,12 @@ function tick(now) {
 loadLocal(local);
 refresh();
 setInterval(refresh, 15000);
+setInterval(() => {
+  refreshHealth();
+  inspect();
+}, 1000);
+setInterval(() => {
+  if (mode === "live") loadBookmarks();
+}, 10000);
 requestAnimationFrame(tick);
 window.addEventListener("beforeunload", stopLive);

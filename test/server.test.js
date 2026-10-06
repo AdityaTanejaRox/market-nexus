@@ -86,6 +86,24 @@ test("authenticated ingestion, replay, idempotency and restart recovery", async 
       page.frames.map((f) => f.time),
       [2, 3],
     );
+    const marks = await (
+      await fetch(running.url + "/api/sessions/test-session/bookmarks")
+    ).json();
+    const fills = frames
+      .flatMap((f) => f.events)
+      .filter((e) => e.type === "FILL");
+    if (fills.length) {
+      assert.equal(marks.largest.qty, Math.max(...fills.map((e) => e.qty)));
+      const order = await (
+        await fetch(
+          running.url +
+            "/api/sessions/test-session/orders?id=" +
+            fills[0].orderId,
+        )
+      ).json();
+      assert.equal(order.events.length, 5);
+      assert.ok(order.events.every((e) => e.frameTime === 3));
+    }
     const exported = await (
       await fetch(running.url + "/api/sessions/test-session/export")
     ).text();
@@ -160,6 +178,52 @@ test("bounded storage rejects new data without overwriting stored state", async 
     );
   } finally {
     await app.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("existing recordings receive bookmark indexes once without losing frames", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const directory = mkdtempSync(join(tmpdir(), "nexus-migrate-"));
+  const db = new DatabaseSync(join(directory, "sessions.sqlite"));
+  db.exec(
+    "CREATE TABLE sessions(id TEXT PRIMARY KEY,source TEXT NOT NULL,label TEXT NOT NULL,created TEXT NOT NULL,updated TEXT NOT NULL); CREATE TABLE frames(session_id TEXT NOT NULL,seq INTEGER NOT NULL,time REAL NOT NULL,json TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(session_id,seq));",
+  );
+  const frame = generateSession(42, 91).frames[91];
+  db.prepare("INSERT INTO sessions VALUES(?,?,?,?,?)").run(
+    "legacy",
+    "demo",
+    "Legacy capture",
+    "2026-10-06",
+    "2026-10-06",
+  );
+  db.prepare("INSERT INTO frames VALUES(?,?,?,?,?)").run(
+    "legacy",
+    frame.seq,
+    frame.time,
+    JSON.stringify(frame),
+    "legacy-hash",
+  );
+  db.close();
+  let running;
+  try {
+    running = await start(directory);
+    let marks = await (
+      await fetch(running.url + "/api/sessions/legacy/bookmarks")
+    ).json();
+    assert.equal(marks.events.length, 1);
+    assert.equal(marks.events[0].type, "FEED_GAP");
+    assert.equal(marks.events[0].frameTime, 91);
+    await running.app.close();
+    running = await start(directory);
+    marks = await (
+      await fetch(running.url + "/api/sessions/legacy/bookmarks")
+    ).json();
+    assert.equal(marks.events.length, 1);
+    const list = await (await fetch(running.url + "/api/sessions")).json();
+    assert.equal(list.sessions[0].frame_count, 1);
+  } finally {
+    if (running) await running.app.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });

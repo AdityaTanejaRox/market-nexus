@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Market Nexus</title>
   </head>
-  <body>
+  <body class="cinematic">
     <div id="world"></div>
     <header>
       <div>
@@ -13,10 +13,21 @@
         <h1>MARKET <span>NEXUS</span></h1>
       </div>
       <div id="connection" role="status">LOCAL SIMULATION</div>
-      <button id="cinematic">Cinematic</button
-      ><button id="home">Reset camera</button>
+      <button id="cinematic">Engineering</button
+      ><button id="home">Reset camera</button
+      ><button id="tour" aria-pressed="false">Camera tour</button>
     </header>
     <section id="metrics"></section>
+    <div id="health-status" role="status"></div>
+    <section id="order-panel" class="panel" hidden>
+      <button id="stop-follow">Close / stop following</button>
+      <div id="order-detail"></div>
+    </section>
+    <div id="city-caption">
+      <span class="caption-line"></span><small>THE STRATEGY SKYLINE</small>
+      <p>Every tower, one strategy.<br />Every trail, an observed event.</p>
+      <span id="scene-source">LOCAL DEMO</span>
+    </div>
     <aside id="left" class="panel">
       <h2>Strategy skyline</h2>
       <div id="strategies"></div>
@@ -63,6 +74,11 @@
             type="file"
             accept="application/json,.json"
             hidden /></label
+        ><label
+          >Bookmarks
+          <select id="bookmarks" aria-label="Replay bookmark">
+            <option value="">Choose event</option>
+          </select></label
         ><button id="eod">End of day</button
         ><select id="sessions" aria-label="Stored session">
           <option value="">Stored sessions</option></select
