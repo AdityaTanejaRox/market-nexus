@@ -1,14 +1,22 @@
-import { WebSocketServer, WebSocket } from 'ws';
-import { generateSession } from '../src/model.js';
-const port=Number(process.env.PORT||8787);
-const wss=new WebSocketServer({host:'127.0.0.1',port,maxPayload:1024});
-// Each new client gets a complete state frame. Never queue behind a slow client.
-wss.on('connection',socket=>{
-  const frames=generateSession(42,3600).frames;let index=0;
-  const send=()=>{if(socket.readyState!==WebSocket.OPEN)return;if(socket.bufferedAmount>256*1024){socket.close(1013,'Slow telemetry consumer');return;}socket.send(JSON.stringify(frames[index++]));if(index===frames.length)socket.close(1000,'Demo session complete');};
-  send();const timer=setInterval(send,1000);socket.on('close',()=>clearInterval(timer));socket.on('error',()=>clearInterval(timer));
+import { fileURLToPath } from "node:url";
+import { resolve, dirname } from "node:path";
+import { createApp } from "./app.js";
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const app = createApp({
+  dataDir: process.env.NEXUS_DATA_DIR || resolve(root, "data"),
+  distDir: resolve(root, "dist"),
+  token: process.env.NEXUS_INGEST_TOKEN,
 });
-wss.on('listening',()=>console.log(`Read-only DEMO telemetry: ws://127.0.0.1:${port}`));
-wss.on('error',error=>{console.error(error.message);process.exitCode=1;});
-function shutdown(){for(const s of wss.clients)s.close(1001,'Server shutdown');wss.close();setTimeout(()=>process.exit(),1000).unref();}
-process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);
+app.server.listen(Number(process.env.PORT || 8787), "127.0.0.1", () =>
+  console.log(
+    `Market Nexus: http://127.0.0.1:${app.server.address().port}\nIngestion credential: ${app.tokenPath}\nNo generated trading data is emitted by the server.`,
+  ),
+);
+let stopping = false;
+async function shutdown() {
+  if (stopping) return;
+  stopping = true;
+  await app.close();
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

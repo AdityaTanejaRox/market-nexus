@@ -1,130 +1,217 @@
-# Market Nexus — frontend v1
+# Market Nexus v2
 
-A complete local Three.js trading-city demo. All built-in prices, strategies,
-P&L, positions, fills and latency values are synthetic. This is a visualization
-project, not a trading engine or a production CME/iLink integration.
+A local, read-only 3D telemetry application with authenticated ingestion,
+persistent SQLite recordings, live WebSocket viewing, and paged historical
+playback. The server starts empty and never fabricates trades. Simulations and
+the C++ example are explicitly labeled. No exchange credentials are included.
 
-## Run
+## Start — Windows, Linux or macOS
 
-Install Node.js 22.12+ (tested with Node 24.19).
-Unzip, open a terminal in `market-nexus`, then:
+Requires Node.js 22.13+ (tested on 24.19) and npm. Python 3.9+ is required only
+for the log bridge. A C++17 compiler is required only for the C++ adapter.
+
+In the extracted `market-nexus` directory:
 
 ```
 npm ci
-npm run dev
+npm start
 ```
 
-Open the local URL printed by Vite (normally http://127.0.0.1:5173).
-In a second terminal in the same folder:
+Open **http://127.0.0.1:8787**. Prebuilt frontend files are included. After editing
+source, run `npm run build` before `npm start`. For development, run `npm run dev`
+in another terminal; Vite proxies the API and WebSocket to the backend.
+
+On first startup the server creates `data/ingest-token` and
+`data/sessions.sqlite`. Keep the data directory between restarts. It contains
+private telemetry and an ingestion credential; it is excluded from the ZIP.
+Do not start two server instances using the same data directory.
+
+## Quick end-to-end demonstration
+
+Keep `npm start` running. In another terminal:
 
 ```
-npm run server
+npm run demo
 ```
 
-Click Connect WS and accept `ws://127.0.0.1:8787`.
-The demo server sends one complete frame per second. It binds to loopback,
-accepts no trading commands and disconnects slow consumers.
-The frontend also works without the server, using a deterministic local replay.
+Refresh sessions in the dashboard, select the session labeled `[demo]`, and
+click **Watch live**. This explicitly synthetic publisher sends 121 snapshots
+at 10 snapshots/second. Select **Open recording** to replay the persisted data.
+Export streams an NDJSON file from the server without loading the whole session
+into browser memory. The local demo button is independent of the server.
 
-## Controls
+## Real data ingestion
 
-- Drag: orbit; wheel/pinch: zoom; click a tower: inspect.
-- Strategy buttons select and focus a tower. Reset camera returns to overview.
-- Cinematic hides engineering panels. Tab toggles it when the page body has focus;
-  Tab continues normal keyboard navigation when a control has focus.
-- Pause/Play, speed and scrub control replay only.
-- End of day freezes the final recorded frame; it does not close a market session.
-- Export writes the loaded/captured session as JSON. Import validates a replay.
-- New demo session returns to the original deterministic simulation.
-- A stale or disconnected live view holds its last state; it does not invent data.
+The server accepts complete visualization state at `POST /api/ingest`:
 
-Tower height shows absolute P&L magnitude, capped for readability. Magenta
-indicates negative P&L; cyan indicates nonnegative P&L, not investment quality.
-Animated order stages are illustrative, not a time-accurate latency trace.
-All windows are instanced geometry; active animation objects are capped at 80.
-Rendering uses a capped pixel ratio, bloom, orbit controls and WebGL.
+```
+Authorization: Bearer <contents of data/ingest-token>
+Content-Type: application/json
+```
 
-## Files
+The body is `{sessionId, label, source, frame}`. Source is `telemetry`, `example`
+or `demo`. A session ID is 1–64 ASCII letters/digits/underscores/hyphens, starting
+with a letter/digit. Use a new ID for each producer epoch/run. Label and source
+are immutable for the session. The producer owns increasing frame sequence and
+elapsed time. Acknowledgment means the frame was committed to SQLite with FULL
+synchronous mode; visualization is broadcast afterward. Identical retries are
+idempotent. Conflicting retries or decreasing sequence/time return HTTP 409.
 
-- `index.html`: accessible controls and data-panel shells.
-- `src/main.js`: replay clock, inspectors, event stream, import/export, WS client.
-- `src/city.js`: floating city, towers, feed buildings, links and animations.
-- `src/model.js`: deterministic demo, frame validation and replay lookup.
-- `src/style.css`: responsive engineering/cinematic layout.
-- `server/index.js`: optional read-only synthetic WebSocket server.
-- `test/model.test.js`: deterministic replay and protocol invariants.
-- `dist/`: prebuilt frontend (serve over HTTP; do not double-click index.html).
-- `package-lock.json`: pinned installation graph. Use npm ci.
+Every frame contains version=1, seq, time, source, five strategies, two feeds,
+and an events array. Optional dropped is the cumulative producer/aggregation
+drop count. See `src/model.js` for the exact validator and field definitions.
+The strategy slots are mm, arb, mom, vwap and rev. Names and symbols are supplied
+by the producer; map your five initial strategy instances to these slots.
+The current layout is limited to five slots; it is not a dynamic fleet manager.
 
-## Build and verify
+State is authoritative for this visualization. Events are sampled animation
+hints. Send periodic complete snapshots sourced from your engine; dropped event
+hints must not corrupt positions, P&L or cumulative counts. No browser value is
+an authoritative trading/accounting source. P&L is display USD, prices are
+instrument display units, quantity/position are integral contracts and latency
+is nanoseconds. Perform currency/instrument normalization in your adapter.
+Numbers represented as integer counters must fit JavaScript safe integer range.
+
+## Log bridge — already framed normalized telemetry
+
+For a completed NDJSON recording:
+
+```
+python adapters/bridge.py capture.ndjson --session my-capture --source telemetry
+```
+
+For a growing recording:
+
+```
+python adapters/bridge.py capture.ndjson --session my-live-run --source telemetry --follow
+```
+
+On some systems use `python3` instead of `python`. The bridge sends only complete
+newline-terminated records, buffers an incomplete tail, retries temporary
+network/server failures, and detects rotation/truncation. It stops on a permanent
+error and never silently skips invalid records. Restarting it from the beginning
+with the same ID safely retries identical committed frames. Do not reuse a
+session ID for another recording. Use `--label`, `--url` and `--token-file` as
+needed. NEXUS_INGEST_TOKEN can provide the credential through the environment.
+
+This is a reader for the normalized frame format, not a parser for your unknown
+existing trading log format. A mapper is needed for existing custom text logs,
+CME PCAPs or execution journals. PCAP market data alone does not contain your
+strategy orders, fills or P&L.
+
+## C++ integration
+
+`adapters/cpp/telemetry.hpp` contains a bounded, fixed-size SPSC queue and a
+cold-thread aggregator/NDJSON writer. Each producer thread must own a separate
+queue. Initialize queues before trading starts. Push fixed-size `nexus::Event`
+values with `try_push`; never write JSON, disk or HTTP from the producer.
+
+StrategySnapshot events carry authoritative P&L, position, orders, fills,
+latency and state. FeedSnapshot events carry authoritative feed sequence, gaps
+and health. Order lifecycle events provide animation hints. Snapshot events
+repair dropped hints; emit them periodically from the authoritative engine.
+Aggregator::drain may be called on multiple producer queues by one worker.
+Then call write_frame from that worker every 100–1000 ms into a dedicated
+telemetry NDJSON file, read by the Python bridge. Prices and P&L in the C++ event
+are signed integer millionths; serialization converts to display units.
+Use one monotonic capture epoch for event timestamp_ns and frame elapsed_ns.
+
+Queue capacity is 4096 slots with 4095 usable entries. It never waits for free
+space; failed pushes increment a drop counter. Required atomics are checked to
+be lock-free on the compilation target. The aggregator caps animation hints at
+200/frame and counts omissions. Writer/network failures affect only observer
+workers. Do not route your lossless audit journal through this lossy queue.
+Measure telemetry overhead in your actual deployment; it is not zero.
+
+Build the synthetic C++ integration example with CMake:
+
+```
+cmake -S adapters/cpp -B build-cpp
+cmake --build build-cpp --config Release
+ctest --test-dir build-cpp -C Release --output-on-failure
+```
+
+Linux/macOS binary: `build-cpp/nexus_example`.
+Windows/MSVC binary: `build-cpp/Release/nexus_example.exe`.
+
+Run the example to generate a 10-second capture:
+
+```
+build-cpp/nexus_example example.ndjson
+python adapters/bridge.py example.ndjson --session cpp-example-1 --source example
+```
+
+On Windows substitute the `.exe` path above. To watch as it writes, start the
+bridge with `--follow` in another terminal after the file appears. Stop the
+bridge with Ctrl+C when the example completes. Actual engine integration uses
+source `telemetry`; the bundled example is synthetic and declares `example`.
+
+Linux without CMake can compile directly:
+
+```
+mkdir -p build-cpp
+g++ -std=c++17 -O2 -pthread adapters/cpp/example.cpp -o build-cpp/nexus_example
+g++ -std=c++17 -O2 -pthread adapters/cpp/test.cpp -o build-cpp/nexus_queue_test
+./build-cpp/nexus_queue_test
+```
+
+## Application behavior
+
+- Drag to orbit, wheel to zoom, click towers/strategy/feed rows to inspect.
+- Strategy labels show P&L/position; height shows capped absolute P&L magnitude.
+- Cyan/amber feed beams show healthy/degraded; magenta strategy beams show losses.
+- Animated order stages are illustrative, not measured latency traces.
+- Inspectors show supplied counters and recently observed order lifecycle.
+- P&L charts cover the currently loaded window; worker bars show supplied latency.
+- Stored replay seeks through indexed pages of 500 frames, rather than loading a
+  whole day. End of day displays the latest persisted frame; it sends no commands.
+- Live subscriptions receive the latest full-state snapshot then new frames.
+- Socket closure retries automatically. Three seconds without frames is stale.
+- Frame sequence gaps are visible; complete snapshots repair displayed state.
+- Export uses persisted sessions. JSON/NDJSON local import is limited to 25 MB
+  and 12,000 frames; ingest larger captures through the Python bridge.
+
+## Operations and boundaries
+
+This release binds to 127.0.0.1 only. Ingestion is token-protected; read access is
+local-machine access with Host/Origin checks. It is not an Internet multi-user
+authentication service. Use the local URL above rather than exposing the port.
+The frontend is served by the same process and needs no runtime CDN.
+
+Storage defaults to a 2 GiB quota; ingestion returns 507 when it is exhausted.
+There is no automatic deletion of recorded sessions. Back up SQLite after a
+clean shutdown (including relevant data files). Export recordings before
+archiving/removing an entire stopped data directory. Frames are limited to
+128 KiB, animation hints to 200/frame, browsers to 32 connections, and outgoing
+WS buffering to 256 KiB/client. Slow clients are disconnected. Feed counters
+are distinct from telemetry frame sequences. Native SQLite errors fail ingestion;
+trading continues independently.
+
+Optional environment variables: PORT, NEXUS_DATA_DIR, NEXUS_INGEST_TOKEN.
+If using NEXUS_INGEST_TOKEN, the bridge uses it too; the generated token file
+need not match an environment override. npm run token prints the token file only.
+
+Not included: order placement/cancel, risk-control writes, exchange connectivity,
+a trading strategy, broker credentials, a CME/iLink decoder, arbitrary-log mapping,
+remote authentication, or a managed hosted backend. These require your actual
+engine/source/environment. The supported result here is the complete observer
+application and its tested producer/ingestion/replay interfaces.
+
+## Validation
 
 ```
 npm test
 npm run build
-npm run preview
 ```
 
-The production bundle includes Three.js; no runtime CDN fetch is required.
-The zip excludes node_modules; npm ci requires network access. A prebuilt dist
-is included, so it may also be served by any static HTTP server without npm.
-The build and automated model/WS checks were run; interactive browser QA was
-not available in the authoring environment. A device needs WebGL support.
+Automated tests cover deterministic replay, bad frame rejection, feed gaps,
+fill counts, authentication, body size, origin/host checks, replay seek/export,
+idempotency, sequence conflicts, restart recovery, WS snapshots and storage quota.
+The C++ queue test exercises FIFO concurrency and saturation. After compiling the
+C++ example on Linux, `node scripts/check-cpp-pipeline.js` tests the complete
+C++ → appended file → Python bridge → SQLite → WebSocket path.
 
-## Wire protocol v1
-
-Each WebSocket text message is a complete JSON frame:
-
-```
-{
-  "version": 1,
-  "seq": 1,
-  "time": 0,
-  "strategies": [ ...all five strategy objects... ],
-  "feeds": [ ...feed A and feed B... ],
-  "events": [ ...events observed since the previous frame... ]
-}
-```
-
-`seq` is the telemetry frame sequence, not the feed packet sequence. `time` is
-seconds since the capture epoch, not Unix nanoseconds. Sequences and times must
-increase within one connection/session. Reconnect can start a new capture.
-Strategy IDs are `mm`, `arb`, `mom`, `vwap`, `rev`; v1's layout is fixed to five
-strategies and feeds A/B. Add layout discovery before using a dynamic fleet.
-See `STRATEGIES`, `validateFrame` and `generateSession` for exact field shapes.
-P&L is USD display units, position/quantity is contracts and latency is ns.
-Real adapters must supply currency/instrument conversion before populating v1;
-the browser's numbers must not serve as authoritative accounting values.
-
-Supported events: ORDER_CREATED, RISK_PASSED, RISK_REJECTED, ORDER_SENT,
-ORDER_ACK, FILL, FEED_GAP and FEED_RECOVERED. Events have unique IDs, a time,
-and order events carry orderId, strategyId, side, qty and price. Event animation
-sampling is allowed; the full strategy/feed state is required in every frame.
-At most 200 events per frame, 128 KB per WS message, 12,000 frames per import
-and 25 MB per imported file. Live capture retains the latest 12,000 frames.
-Repeated/out-of-order frames are rejected; skipped sequences apply fresh state
-and report missing intermediate event animations. There is no audit guarantee.
-
-## Connecting the real C++ system later
-
-Keep this read-only observer outside your trading control path. Prefer one
-bounded SPSC queue per producer thread (SPSC does not support multiple producers).
-Use fixed-size events, no JSON or disk I/O in the trading thread, and explicit
-try-push failure counters. The worker drains queues, aggregates and serializes
-complete visualization frames. Periodic authoritative snapshots repair state
-when telemetry events were dropped; UI backpressure must never reach trading.
-
-Use the existing lossless journal for audit/replay. Do not silently convert it
-into a lossy visualization queue. A journal tailer is also a valid first adapter
-if your existing logging already has safe complete-record framing and asynchronous
-writes; it must buffer incomplete records and handle rotations/truncations.
-
-Telemetry is not free: measure overhead with/without it, isolate consumer CPU
-resources where needed, and measure contention/cache effects. There are no
-nanosecond performance claims for this demo. Replay from PCAP alone contains
-market data, not orders/fills: actual order reconstruction needs the execution
-journal or an explicitly labeled simulation.
-
-Before remote hosting: WSS, authentication, origin policy, access control,
-server-side schema enforcement, bounded resources, currency metadata and real
-snapshot sourcing are required. This demo provides no order placement, cancel,
-risk-limit editing, authentication or durable server-side storage.
+Interactive browser QA was unavailable in the authoring environment. Build,
+backend and C++/Python integration tests were executed. Native Node SQLite may
+emit an experimental warning on some Node releases. The chart/3D renderer needs
+WebGL; data panels remain available if WebGL initialization fails.

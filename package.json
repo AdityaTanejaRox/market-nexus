@@ -1,1 +1,26 @@
-{"name":"market-nexus","version":"1.0.0","private":true,"type":"module","scripts":{"dev":"vite --host 127.0.0.1","build":"vite build","preview":"vite preview --host 127.0.0.1","server":"node server/index.js","test":"node --test"},"dependencies":{"three":"0.180.0","ws":"8.18.3"},"devDependencies":{"vite":"7.1.9"}}
+{
+  "name": "market-nexus",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "server": "node server/index.js",
+    "test": "node --test",
+    "start": "node server/index.js",
+    "demo": "node scripts/publish-demo.js",
+    "token": "node scripts/show-token.js"
+  },
+  "dependencies": {
+    "three": "0.180.0",
+    "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "vite": "7.1.9"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}
