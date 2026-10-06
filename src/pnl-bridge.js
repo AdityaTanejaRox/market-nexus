@@ -1,7 +1,7 @@
 import * as T from "three";
 
 // The elevated chart is sourced exclusively from recorded total P&L snapshots.
-export function pnlBridgePoints(frames, strategyId = null) {
+export function pnlBridgePoints(frames, strategyId = null, bounds = null) {
   const samples = frames
     .filter((f) => !strategyId || f.strategies.some((s) => s.id === strategyId))
     .slice(-240);
@@ -11,8 +11,8 @@ export function pnlBridgePoints(frames, strategyId = null) {
       ? f.strategies.find((s) => s.id === strategyId).pnl
       : f.strategies.reduce((sum, s) => sum + s.pnl, 0),
   );
-  const low = Math.min(0, ...values),
-    high = Math.max(0, ...values),
+  const low = bounds?.low ?? Math.min(0, ...values),
+    high = bounds?.high ?? Math.max(0, ...values),
     span = high - low || 1;
   const first = samples[0].time,
     duration = samples.at(-1).time - first || 1;
@@ -98,6 +98,16 @@ export function createPnlBridge(scene, targets, options = {}) {
     }),
   );
   group.add(line);
+  const zeroGeometry = new T.BufferGeometry();
+  const zeroLine = new T.Line(
+    zeroGeometry,
+    new T.LineBasicMaterial({
+      color: 0xa5b3bc,
+      transparent: true,
+      opacity: 0.65,
+    }),
+  );
+  group.add(zeroLine);
   const stems = new T.LineSegments(
     new T.BufferGeometry(),
     new T.LineBasicMaterial({
@@ -124,8 +134,8 @@ export function createPnlBridge(scene, targets, options = {}) {
   }
   return {
     group,
-    update(frames) {
-      const points = pnlBridgePoints(frames, options.strategyId);
+    update(frames, bounds = null) {
+      const points = pnlBridgePoints(frames, options.strategyId, bounds);
       const latest = frames
         .at(-1)
         ?.strategies.find((s) => s.id === options.strategyId);
@@ -133,6 +143,20 @@ export function createPnlBridge(scene, targets, options = {}) {
         latest?.pnl < 0 ? 0xff82bd : (options.color ?? 0x67ffd4),
       );
       writePoints(geometry, points);
+      const scope = frames.slice(-240).flatMap((f) =>
+        options.strategyId
+          ? f.strategies.filter((s) => s.id === options.strategyId).map((s) => s.pnl)
+          : [f.strategies.reduce((sum, s) => sum + s.pnl, 0)],
+      );
+      const low = bounds?.low ?? Math.min(0, ...scope),
+        high = bounds?.high ?? Math.max(0, ...scope),
+        y = 3.5 + (6 * (0 - low)) / (high - low || 1);
+      zeroGeometry.dispose();
+      zeroGeometry.setAttribute(
+        "position",
+        new T.Float32BufferAttribute([-13, y, -14, 13, y, -14], 3),
+      );
+      zeroGeometry.computeBoundingSphere();
       writePoints(
         stems.geometry,
         points

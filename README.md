@@ -1,11 +1,43 @@
-# Market Nexus v7 — exchange cities and strategy P&L bridges
+# Market Nexus v8 — Professional operations workstation
 
 A local, read-only 3D telemetry application with authenticated ingestion,
 persistent SQLite recordings, live WebSocket viewing, and paged historical
 playback. The server starts empty and never fabricates trades. Simulations and
 the C++ example are explicitly labeled. No exchange credentials are included.
 
-## New in v7
+## New in v8
+
+Professional is the default saved workspace theme. It uses matte slate materials,
+a grounded architectural map, stable tower heights, quiet status indicators,
+no starfield/bloom/orbital traffic, and compact exception annotations. All source
+order stages, bridge charts, replay, imports, pop-outs and order-follow remain.
+Showcase restores the cinematic presentation through the Theme selector.
+
+The workstation has a searchable exchange/strategy tree, linked 3D map and
+inspector, and Orders/Fills/Positions/Exceptions tables. Click an order row to
+follow its observed lifecycle. Tables cover the loaded observation window;
+they do not claim to contain the entire order ledger. Position quantities remain
+per strategy/instrument; unlike instruments are not added into a synthetic risk
+number. There are no order placement or risk-control writes.
+
+Bridge charts default to a shared USD range across loaded strategy snapshots.
+Individual scaling is an explicit option. Bridge labels identify units, bounds
+and scale mode, with a zero reference line. Charts provide source-time/value
+hover text. Camera auto-focus is optional and off by default; order-follow camera
+movement remains an explicit action. Theme, scale, table tab, camera preference,
+monitor visibility and ticker pause state are saved in browser-local storage.
+The provenance bar distinguishes source, live/replay state, frame sequence,
+elapsed capture time, receipt freshness and supplied producer drops.
+
+A private hosted inspection version uses the same frontend with labeled browser
+simulation and imports. It does not host the Node SQLite/WS ingestion service.
+The ZIP contains that full local service and prebuilt Professional frontend;
+run it locally for live producer ingestion and persistent recording.
+This remains a read-only observer application. A firm's deployment still needs
+its actual identity/access model, venue-specific feed adapters and authoritative
+capture/audit integration; the visual theme does not supply those systems.
+
+## Included from v7
 
 Market Nexus is the state. CME, B3, A5X, NASDAQ and NYSE are distinct floating
 cities around the central observer services. Each source strategy is a tower
@@ -37,7 +69,7 @@ The fixed, 56-pixel bottom broadcast ribbon advances at 55 pixels/second, even
 while replay is paused. Updating messages does not restart its offset. Hover,
 keyboard focus or Pause ticker stops it; Run ticker resumes. It shows observed
 order activity and venue/strategy/instrument/P&L/price values. The version beside
-the title is **v7.0.0**. Stop an older server before starting this extracted folder.
+the title is **v8.0.0**. Stop an older server before starting this extracted folder.
 
 ## Included from v6
 
@@ -52,14 +84,14 @@ Each card has **Pop out ↗**, which opens a separate browser window or tab with
 source details and chart images. It updates while the original card is open;
 closing that card leaves the detached page at its last snapshot. Browser popup
 settings may require allowing popups for the local application.
-The larger bottom marquee stays visible in both modes. **v7.0.0** appears beside
+The larger bottom marquee stays visible in both modes. **v8.0.0** appears beside
 the title so an older running build is easy to identify. Static HTML is served
 with no-store and assets with revalidation headers.
 
 When upgrading: stop the old server with Ctrl+C, extract this ZIP to a new folder,
 copy your old `data` folder if retaining recordings, then run `npm ci` and
 `npm start` from the new `market-nexus` directory. Open the URL below and press
-Ctrl+Shift+R. Confirm **v7.0.0** beside the title. A server already running from
+Ctrl+Shift+R. Confirm **v8.0.0** beside the title. A server already running from
 an older directory continues serving that directory until stopped.
 
 ## Included from v5
@@ -353,7 +385,8 @@ The C++ queue test exercises FIFO concurrency and saturation. After compiling th
 C++ example on Linux, `node scripts/check-cpp-pipeline.js` tests the complete
 C++ → appended file → Python bridge → SQLite → WebSocket path.
 
-The v7 automated suite contains 30 tests, including venue grouping, individual
+The v8 automated suite includes workstation preference, shared scale and
+operation table tests in addition to the existing 30 tests, including venue grouping, individual
 bridge scope, dynamic fleet cleanup, candle/signal validation,
 source-based history summaries and presentation data.
 
@@ -361,3 +394,9 @@ Interactive browser QA was unavailable in the authoring environment. Build,
 backend and C++/Python integration tests were executed. Native Node SQLite may
 emit an experimental warning on some Node releases. The chart/3D renderer needs
 WebGL; data panels remain available if WebGL initialization fails.
+
+## Private hosted preview
+
+https://market-nexus-operations.adityatanejarox19.chatgpt.site
+
+The hosted preview runs browser demo telemetry and imported recordings. Run the downloadable project locally to use the Node observer, ingestion, and recording backend.

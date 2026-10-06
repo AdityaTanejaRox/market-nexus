@@ -144,7 +144,7 @@ test("served release includes visible controls and forces HTML revalidation", as
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "no-store");
     const html = await response.text();
-    assert.ok(html.includes("v7.0.0"));
+    assert.ok(html.includes("v8.0.0"));
     for (const id of [
       "show-details",
       "show-prices",
@@ -184,4 +184,13 @@ test("P&L bridge geometry grows and shrinks without truncating the replay graph"
   assert.equal(graph.geometry.drawRange.count, 4);
   bridge.update([]);
   assert.equal(graph.geometry.drawRange.count, 0);
+});
+
+test("aggregate bridge zero reference uses aggregate P&L bounds", () => {
+  const scene = new T.Scene();
+  const bridge = createPnlBridge(scene, []);
+  bridge.update([{ time: 1, strategies: [{ pnl: -100 }, { pnl: 200 }] }]);
+  const lines = bridge.group.children.filter((o) => o.isLine && !o.isLineSegments);
+  assert.equal(lines[0].geometry.attributes.position.getY(0), 9.5);
+  assert.equal(lines[1].geometry.attributes.position.getY(0), 3.5);
 });

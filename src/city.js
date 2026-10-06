@@ -53,13 +53,18 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     beacons = [],
     flows = [],
     effects = [];
+  let professionalMode = true,
+    autoFocus = false,
+    selectedStrategy = "mm";
+  const originalMaterials = new WeakMap();
   let tour = false,
     disposed = false,
     flight = null;
   let following = null,
     followQueue = [],
     followTimer = 0,
-    lastFrame = null;
+    lastFrame = null,
+    lastHealth = {};
   const material = (color, emission = 0) =>
     new T.MeshStandardMaterial({
       color,
@@ -90,6 +95,7 @@ export function createCity(host, onSelect, onOrder = () => {}) {
       parent,
     );
     m.rotation.x = Math.PI / 2;
+    m.userData.ornament = true;
     return m;
   }
   function lines(points, color, parent = scene, opacity = 0.4) {
@@ -136,12 +142,12 @@ export function createCity(host, onSelect, onOrder = () => {}) {
   function textPanel(sprite, title, rows, color = "#64eeff", history = []) {
     const { canvas: c, context: x, texture } = sprite.userData;
     x.clearRect(0, 0, c.width, c.height);
-    x.fillStyle = "rgba(3,7,27,.90)";
+    x.fillStyle = professionalMode ? "rgba(27,36,47,.96)" : "rgba(3,7,27,.90)";
     x.fillRect(0, 0, c.width, c.height);
-    x.strokeStyle = color;
+    x.strokeStyle = professionalMode ? "#627588" : color;
     x.lineWidth = 2;
     x.strokeRect(2, 2, c.width - 4, c.height - 4);
-    x.fillStyle = color;
+    x.fillStyle = professionalMode ? "#adc0cf" : color;
     x.fillRect(0, 0, 5, c.height);
     x.textAlign = "left";
     x.font = "bold 21px monospace";
@@ -177,6 +183,7 @@ export function createCity(host, onSelect, onOrder = () => {}) {
   // Reusable illuminated facade. Instancing keeps the surrounding skyline to one draw call.
   const facade = new T.ShaderMaterial({
     toneMapped: false,
+    uniforms: { uProfessional: { value: 1 } },
     vertexShader: `
     attribute vec3 aSize; varying vec2 vUv; varying vec3 vSize; varying vec3 vNormal;
     void main(){vUv=uv;vSize=aSize;vNormal=normal;vec4 p=vec4(position,1.0);
@@ -185,14 +192,16 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     #endif
     gl_Position=projectionMatrix*modelViewMatrix*p;}`,
     fragmentShader: `
-    varying vec2 vUv; varying vec3 vSize; varying vec3 vNormal;
+    uniform float uProfessional; varying vec2 vUv; varying vec3 vSize; varying vec3 vNormal;
     void main(){bool roof=abs(vNormal.y)>.5;float faceWidth=abs(vNormal.z)>.5?vSize.x:vSize.z;
       vec2 cells=vUv*vec2(faceWidth*7.0,vSize.y*5.0);vec2 grid=fract(cells);
       float seed=fract(sin(dot(floor(cells),vec2(12.9898,78.233)))*43758.5453);
       float lit=step(.20,grid.x)*step(grid.x,.70)*step(.2,grid.y)*step(grid.y,.62)*step(.27,seed);
       vec3 base=vec3(.015,.025,.10);vec3 window=mix(vec3(.24,.38,.85),vec3(.75,.85,1.0),seed);
       vec2 edge=min(vUv,1.0-vUv);float trim=1.0-step(.012,min(edge.x,edge.y));
-      gl_FragColor=vec4(roof?vec3(.035,.035,.12):base+window*lit*.8+vec3(.10,.17,.40)*trim,1.0);}`,
+      vec3 classic=roof?vec3(.035,.035,.12):base+window*lit*.8+vec3(.10,.17,.40)*trim;
+      vec3 operational=roof?vec3(.30,.35,.40):vec3(.19,.24,.29)+vec3(.10,.13,.15)*lit+vec3(.10)*trim;
+      gl_FragColor=vec4(mix(classic,operational,uProfessional),1.0);}`,
   });
   function urbanBuildings(specs, parent = scene) {
     const geometry = new T.BoxGeometry(1, 1, 1);
@@ -378,6 +387,13 @@ export function createCity(host, onSelect, onOrder = () => {}) {
       new T.Vector3(0, 10, 0),
       skyline,
     );
+    const healthBadge = add(
+      new T.SphereGeometry(0.22, 12, 8),
+      neon(0x7396b0),
+      new T.Vector3(0, 10, 0),
+      group,
+    );
+    healthBadge.userData.semantic = true;
     const crown = new T.Group();
     crown.position.y = 9;
     group.add(crown);
@@ -425,6 +441,7 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     selection.visible = false;
     return {
       group,
+      healthBadge,
       skyline,
       crown,
       beamGroup,
@@ -812,7 +829,8 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     effects.length = 0;
     for (const t of towers.values()) t.history = [];
   }
-  function update(frame, health = {}) {
+  function update(frame, health = lastHealth) {
+    lastHealth = health;
     lastFrame = frame;
     syncCities(frame);
     let total = 0;
@@ -820,8 +838,25 @@ export function createCity(host, onSelect, onOrder = () => {}) {
       const t = towers.get(s.id);
       if (!t) continue;
       total += s.pnl;
-      const height = 7.5 + Math.min(Math.abs(s.pnl) / 2500, 4);
+      const height = professionalMode
+        ? 8.5
+        : 7.5 + Math.min(Math.abs(s.pnl) / 2500, 4);
       t.skyline.scale.y = height / 9.5;
+      t.beamGroup.visible = !professionalMode;
+      t.crown.visible = !professionalMode;
+      t.healthBadge.visible = professionalMode;
+      t.healthBadge.material.color.setHex(
+        health[s.id]?.state === "HEALTHY"
+          ? 0x7396b0
+          : health[s.id]?.state === "DEGRADED"
+            ? 0xbd964f
+            : ["STOPPED", "OFFLINE", "DISCONNECTED"].includes(
+                  health[s.id]?.state,
+                )
+              ? 0xba6161
+              : 0x8f96a4,
+      );
+      t.tag.visible = !professionalMode || s.id === selectedStrategy;
       t.crown.position.y = height;
       t.beamGroup.position.y = height + 0.7;
       t.tag.position.y = height + 3;
@@ -997,7 +1032,7 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     const group = new T.Group();
     scene.add(group);
     const beads = [];
-    for (let i = 0; i < 16; i++)
+    for (let i = 0; i < (professionalMode ? 2 : 16); i++)
       beads.push(
         add(
           new T.SphereGeometry(i === 0 ? 0.14 : 0.065, 6, 6),
@@ -1038,11 +1073,15 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     raf = requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.05),
       elapsed = clock.elapsedTime;
+
+    particles.visible = starfield.visible = !professionalMode;
     particles.rotation.y = elapsed * 0.007;
     starfield.rotation.y = elapsed * 0.0007;
-    for (const r of rings) r.object.rotation[r.axis] += dt * r.speed;
+    if (!professionalMode)
+      for (const r of rings) r.object.rotation[r.axis] += dt * r.speed;
     extras.animate(dt, elapsed);
     for (const f of flows) {
+      f.bead.visible = !professionalMode;
       const t = (elapsed * f.speed + f.phase) % 1;
       f.bead.position.copy(f.curve.getPoint(t));
       f.bead.lookAt(f.bead.position.clone().add(f.curve.getTangent(t)));
@@ -1110,9 +1149,9 @@ export function createCity(host, onSelect, onOrder = () => {}) {
         effects.splice(i, 1);
       }
     }
-    composer.render();
+    if (professionalMode) renderer.render(scene, camera);
+    else composer.render();
   }
-  animate();
   function fly(position, target) {
     tour = false;
     following = null;
@@ -1125,12 +1164,75 @@ export function createCity(host, onSelect, onOrder = () => {}) {
       age: 0,
     };
   }
+  const ground = add(
+    new T.PlaneGeometry(200, 185),
+    new T.MeshStandardMaterial({ color: 0x202a34, roughness: 1, metalness: 0 }),
+    new T.Vector3(0, -0.92, 0),
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.userData.semantic = true;
+  const grid = new T.GridHelper(200, 40, 0x46545f, 0x2d3b47);
+  grid.position.y = -0.9;
+  grid.userData.semantic = true;
+  scene.add(grid);
+  function applySceneMaterials() {
+    facade.uniforms.uProfessional.value = professionalMode ? 1 : 0;
+    scene.background.set(professionalMode ? "#171f28" : "#040315");
+    scene.fog.color.set(professionalMode ? "#171f28" : "#080726");
+    scene.fog.density = professionalMode ? 0.001 : 0.0025;
+    bloom.enabled = !professionalMode;
+    ground.visible = grid.visible = professionalMode;
+    scene.traverse((o) => {
+      if (o.userData.ornament) o.visible = !professionalMode;
+      if (o.userData.semantic) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material])
+        if (m && m !== facade && !m.isSpriteMaterial && m.color) {
+          if (!originalMaterials.has(m))
+            originalMaterials.set(m, {
+              color: m.color.clone(),
+              emissive: m.emissive?.clone(),
+              intensity: m.emissiveIntensity,
+              roughness: m.roughness,
+              metalness: m.metalness,
+              opacity: m.opacity,
+            });
+          const original = originalMaterials.get(m);
+          if (professionalMode) {
+            m.color.set(
+              m.isMeshStandardMaterial
+                ? 0x52616f
+                : m.isLineBasicMaterial
+                  ? 0x738899
+                  : 0x8d9eac,
+            );
+            if (m.emissive) m.emissive.set(0x000000);
+            if (m.isMeshStandardMaterial) {
+              m.roughness = 0.85;
+              m.metalness = 0.1;
+            }
+            if (m.transparent) m.opacity = Math.min(original.opacity, 0.45);
+          } else {
+            m.color.copy(original.color);
+            if (m.emissive && original.emissive)
+              m.emissive.copy(original.emissive);
+            if (m.isMeshStandardMaterial) {
+              m.roughness = original.roughness;
+              m.metalness = original.metalness;
+            }
+            m.opacity = original.opacity;
+          }
+        }
+    });
+  }
+  applySceneMaterials();
+  animate();
   return {
     update,
     emit,
     clearEffects,
     data(frame, events, history) {
       extras.update(frame, events, history);
+      applySceneMaterials();
     },
     histories(cards) {
       extras.histories(cards);
@@ -1154,6 +1256,14 @@ export function createCity(host, onSelect, onOrder = () => {}) {
       followQueue = [];
     },
     focus(id) {
+      if (towers.has(id)) {
+        selectedStrategy = id;
+        extras.selectStrategy(id);
+        if (professionalMode && !autoFocus) {
+          for (const [key, t] of towers) t.selection.visible = key === id;
+          return;
+        }
+      }
       if (id.startsWith("city-")) {
         const v = EXCHANGES.find((e) => e.id === id.slice(5));
         if (v) {
@@ -1176,6 +1286,18 @@ export function createCity(host, onSelect, onOrder = () => {}) {
     },
     home() {
       fly(homePosition.clone(), homeTarget.clone());
+    },
+    professional(value) {
+      professionalMode = value;
+      extras.professional(value);
+      applySceneMaterials();
+      if (lastFrame) update(lastFrame);
+    },
+    cameraFocus(value) {
+      autoFocus = value;
+    },
+    bridgeScale(value) {
+      extras.bridgeScale(value);
     },
     cinematic(value) {
       bloom.strength = value ? 1.35 : 1.05;

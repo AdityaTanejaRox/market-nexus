@@ -1,4 +1,5 @@
 import * as T from "three";
+import { pnlBounds } from "./workstation.js";
 import { EXCHANGES, exchangeOf, stateLayout } from "./exchanges.js";
 import { createPnlBridge } from "./pnl-bridge.js";
 import { priceSeries, eventText } from "./presentation.js";
@@ -79,6 +80,8 @@ export function createCityExtras({
     bursts = [],
     announcements = [],
     memories = [];
+  let professionalMode = true,
+    scaleMode = "shared";
   let activeStrategy = "mm",
     lastFrame = null,
     lastHistory = [],
@@ -415,12 +418,12 @@ export function createCityExtras({
   function scanner(sprite, strategy, events) {
     const { canvas: c, context: x, texture } = sprite.userData;
     x.clearRect(0, 0, c.width, c.height);
-    x.fillStyle = "rgba(4,8,26,.95)";
+    x.fillStyle = professionalMode ? "rgba(26,36,46,.96)" : "rgba(4,8,26,.95)";
     x.fillRect(0, 0, c.width, c.height);
     x.strokeStyle = "#66ffd4";
     x.lineWidth = 2;
     x.strokeRect(1, 1, c.width - 2, c.height - 2);
-    x.fillStyle = "#70ffcb";
+    x.fillStyle = professionalMode ? "#bccbd7" : "#70ffcb";
     x.font = "bold 24px monospace";
     x.fillText("SIGNAL SCANNER / " + strategy.symbol, 14, 32);
     const signal = strategy.signal;
@@ -434,7 +437,11 @@ export function createCityExtras({
     x.fillStyle = "#25234c";
     x.fillRect(14, 77, c.width - 28, 23);
     if (signal) {
-      x.fillStyle = signal.direction === "SELL" ? "#ff59a1" : "#5affce";
+      x.fillStyle = professionalMode
+        ? "#7f95a8"
+        : signal.direction === "SELL"
+          ? "#ff59a1"
+          : "#5affce";
       x.fillRect(14, 77, ((c.width - 28) * signal.charge) / 100, 23);
       x.fillStyle = "#ffffff";
       x.fillText(
@@ -478,18 +485,26 @@ export function createCityExtras({
     for (const s of frame.strategies) {
       const bridge = strategyBridges.get(s.id);
       if (bridge) {
-        bridge.update(history);
+        const bounds = pnlBounds(history, s.id, scaleMode === "shared");
+        bridge.update(history, bounds);
         textPanel(
           bridge.label,
           s.name + " P&L",
           [
             exchangeOf(s) + " CITY",
             (s.pnl < 0 ? "-" : "+") + "$" + Math.abs(s.pnl).toFixed(0),
-            "Click bridge / follow recorded orders",
+            "USD [" +
+              bounds.low.toFixed(0) +
+              ", " +
+              bounds.high.toFixed(0) +
+              "] " +
+              scaleMode,
           ],
           s.pnl < 0 ? "#ff81bd" : "#8affdc",
         );
       }
+      charts.get(s.id).visible = scanners.get(s.id).visible =
+        !professionalMode || s.id === activeStrategy;
       chart(charts.get(s.id), s, events);
       scanner(scanners.get(s.id), s, events);
     }
@@ -505,6 +520,30 @@ export function createCityExtras({
     ]);
   }
   function burst(position, color, label, event = null) {
+    if (professionalMode) {
+      if (
+        !event ||
+        ![
+          "RISK_REJECTED",
+          "RISK_WARNING",
+          "RISK_LIMIT_BREACHED",
+          "FEED_GAP",
+        ].includes(event.type)
+      )
+        return;
+      if (announcements.length >= 8) dispose(announcements.shift().sprite);
+      const sprite = billboard(
+        label,
+        [event.time.toFixed(3) + "s"],
+        position.clone().add(new T.Vector3(0, 1.5, 0)),
+        2.2,
+        "#cbb58b",
+      );
+      sprite.userData.id = "event-" + event.id;
+      targets.push(sprite);
+      announcements.push({ sprite, age: 0 });
+      return;
+    }
     if (bursts.length >= 14) return;
     const group = new T.Group();
     group.position.copy(position);
@@ -601,6 +640,7 @@ export function createCityExtras({
     });
   }
   function animate(dt, elapsed) {
+    robot.visible = !professionalMode;
     head.rotation.y = Math.sin(elapsed * 0.4) * 0.12;
     robot.position.y = Math.sin(elapsed * 1.3) * 0.025;
     for (let i = bursts.length - 1; i >= 0; i--) {
@@ -641,6 +681,19 @@ export function createCityExtras({
     }
   }
   return {
+    professional(value) {
+      professionalMode = value;
+      robot.visible = !value;
+      if (lastFrame) update(lastFrame, log, lastHistory);
+    },
+    selectStrategy(id) {
+      activeStrategy = id;
+      if (lastFrame) update(lastFrame, log, lastHistory);
+    },
+    bridgeScale(value) {
+      scaleMode = value;
+      if (lastFrame) update(lastFrame, log, lastHistory);
+    },
     update,
     animate,
     burst,

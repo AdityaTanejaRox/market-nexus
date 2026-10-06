@@ -36,7 +36,7 @@ export function createWindows(host) {
         }
         external.opener = null;
         external.document.write(
-          '<!doctype html><html><head><meta charset="utf-8"><title>Market Nexus detail</title><style>body{margin:0;padding:24px;background:#09152a;color:#dbf7ef;font:14px system-ui}h1{font-size:18px;color:#85ffe0}.kv{display:flex;justify-content:space-between;gap:25px;padding:9px 0;border-bottom:1px solid #274158}p{color:#9ab7cc}img{width:100%;height:auto}small{color:#7fb6bc}button{display:none}</style></head><body><h1></h1><small>Market Nexus v7 · Source details · updates while the original card is open</small><main></main></body></html>',
+          '<!doctype html><html><head><meta charset="utf-8"><title>Market Nexus detail</title><style>body{margin:0;padding:24px;background:#09152a;color:#dbf7ef;font:14px system-ui}h1{font-size:18px;color:#85ffe0}.kv{display:flex;justify-content:space-between;gap:25px;padding:9px 0;border-bottom:1px solid #274158}p{color:#9ab7cc}img{width:100%;height:auto}small{color:#7fb6bc}button{display:none}</style></head><body><h1></h1><small>Market Nexus v8 · Source details · updates while the original card is open</small><main></main></body></html>',
         );
         external.document.close();
         entry.external = external;
@@ -99,7 +99,7 @@ export function createWindows(host) {
         canvas.replaceWith(img);
       });
       entry.external.document.title =
-        entry.name.textContent + " · Market Nexus v7";
+        entry.name.textContent + " · Market Nexus v8";
       entry.external.document.querySelector("h1").textContent =
         entry.name.textContent;
       entry.external.document.querySelector("main").replaceChildren(copy);

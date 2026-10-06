@@ -1,4 +1,20 @@
 import "./style.css";
+import { sanitizeWorkspace, operationRows, pnlBounds } from "./workstation.js";
+const HOSTED_PREVIEW = import.meta.env.VITE_HOSTED_PREVIEW === "1";
+let workspace;
+try {
+  workspace = sanitizeWorkspace(
+    JSON.parse(localStorage.getItem("nexus-workspace") || "{}"),
+  );
+} catch {
+  workspace = sanitizeWorkspace();
+}
+function saveWorkspace() {
+  try {
+    localStorage.setItem("nexus-workspace", JSON.stringify(workspace));
+  } catch {}
+}
+
 import { EXCHANGES, exchangeOf, exchangeTotals } from "./exchanges.js";
 import { createWindows } from "./windows.js";
 import { eventText, priceSeries, snapshotCards } from "./presentation.js";
@@ -59,7 +75,7 @@ let city,
   followGeneration = 0;
 try {
   city = createCity($("world"), select, followOrder);
-  city.cinematic(true);
+  city.cinematic(false);
 } catch (e) {
   $("notice").textContent = `WebGL unavailable: ${e.message}`;
   city = {
@@ -69,6 +85,9 @@ try {
     focus() {},
     home() {},
     cinematic() {},
+    professional() {},
+    cameraFocus() {},
+    bridgeScale() {},
     tour() {},
     health() {},
     data() {},
@@ -164,9 +183,11 @@ function select(id) {
     return;
   }
   selected = id;
+  if (displayed.strategies.some((s) => s.id === id))
+    $("display-strategy").value = id;
   city.focus(id);
   inspect();
-  openEntityWindow(id);
+  if (workspace.theme === "showcase") openEntityWindow(id);
 }
 function inspect() {
   const s = displayed.strategies.find((x) => x.id === selected),
@@ -224,13 +245,34 @@ function inspect() {
   }
   if (order)
     html += `<button class="follow-order" data-order="${esc(order.orderId)}">Follow this order</button>`;
+  if (workspace.theme === "professional" && s) {
+    html +=
+      '<h2 style="margin-top:16px">Price / signal</h2>' +
+      kv("Chart data", priceSeries(s, log).label) +
+      '<canvas class="window-chart" width="480" height="170" data-chart="' +
+      s.id +
+      '"></canvas>' +
+      kv("Signal", s.signal?.label ?? "Not supplied") +
+      kv(
+        "Charge",
+        s.signal ? s.signal.charge.toFixed(0) + "%" : "Not supplied",
+      ) +
+      '<button data-inspector-pnl="' +
+      s.id +
+      '">P&L bridge</button><button data-inspector-detail="' +
+      s.id +
+      '">Full details / pop out</button>';
+  }
   $("inspector").innerHTML = html;
+  paintWindowCharts($("inspector"));
 }
 function draw(frame, events = []) {
   displayed = frame;
   $("scene-source").textContent =
     `${(frame.source || "imported").toUpperCase()} / ${mode.toUpperCase()}`;
   city.update(frame, healthMap());
+  renderOperations();
+  renderProvenance();
   city.data(
     frame,
     [...log].reverse(),
@@ -256,13 +298,7 @@ function draw(frame, events = []) {
         `<div class="metric"><small>${k}</small><strong>${v}</strong></div>`,
     )
     .join("");
-  $("strategies").innerHTML = [...frame.strategies]
-    .sort((a, b) => b.pnl - a.pnl)
-    .map(
-      (s) =>
-        `<button class="row" data-id="${s.id}"><span>${esc(s.name)}<small>${esc(s.symbol)} · ${s.state}</small></span><b class="${s.pnl >= 0 ? "positive" : "negative"}">${money(s.pnl)}</b></button>`,
-    )
-    .join("");
+  renderStrategyTree();
   $("feeds").innerHTML = frame.feeds
     .map(
       (f) =>
@@ -335,6 +371,7 @@ async function api(path) {
   return r.json();
 }
 async function refresh() {
+  if (HOSTED_PREVIEW) return;
   try {
     const data = await api("/api/sessions");
     const old = $("sessions").value;
@@ -704,9 +741,12 @@ function paintPnl(canvas, strategyId = null) {
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = "#09172b";
   ctx.fillRect(0, 0, w, h);
-  const low = Math.min(0, ...values),
-    high = Math.max(0, ...values),
-    span = high - low || 1;
+  const { low, high } = pnlBounds(
+    samples,
+    strategyId,
+    !!strategyId && workspace.scale === "shared",
+  );
+  const span = high - low || 1;
   ctx.strokeStyle = "#243e53";
   ctx.lineWidth = 1;
   for (let i = 0; i < 4; i++) {
@@ -715,7 +755,15 @@ function paintPnl(canvas, strategyId = null) {
     ctx.lineTo(w - 8, 25 + (i * (h - 40)) / 3);
     ctx.stroke();
   }
-  ctx.strokeStyle = "#71ffdc";
+  const zeroY = 28 + (1 - (0 - low) / span) * (h - 45);
+  ctx.strokeStyle = "#637a8d";
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(10, zeroY);
+  ctx.lineTo(w - 10, zeroY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.strokeStyle = workspace.theme === "professional" ? "#98adbd" : "#71ffdc";
   ctx.lineWidth = 2;
   ctx.beginPath();
   values.forEach((v, i) => {
@@ -724,7 +772,7 @@ function paintPnl(canvas, strategyId = null) {
     i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
   });
   ctx.stroke();
-  ctx.fillStyle = "#bcf8e5";
+  ctx.fillStyle = workspace.theme === "professional" ? "#b4c5d1" : "#bcf8e5";
   ctx.font = "14px monospace";
   ctx.fillText(
     (strategyId ? strategyId.toUpperCase() + " " : "TOTAL ") +
@@ -735,6 +783,33 @@ function paintPnl(canvas, strategyId = null) {
     10,
     17,
   );
+  ctx.font = "11px monospace";
+  ctx.fillText(
+    "USD " +
+      low.toFixed(0) +
+      " … " +
+      high.toFixed(0) +
+      " · " +
+      (strategyId ? workspace.scale : "aggregate"),
+    10,
+    h - 3,
+  );
+  canvas.onpointermove = (e) => {
+    if (!samples.length) return;
+    const r = canvas.getBoundingClientRect(),
+      i = Math.max(
+        0,
+        Math.min(
+          samples.length - 1,
+          Math.round(((e.clientX - r.left) / r.width) * (samples.length - 1)),
+        ),
+      );
+    canvas.title =
+      "Session " +
+      samples[i].time.toFixed(3) +
+      "s · USD " +
+      values[i].toFixed(2);
+  };
 }
 function pnlWindowHtml(strategyId = null) {
   const strategy = displayed.strategies.find((s) => s.id === strategyId);
@@ -879,7 +954,10 @@ function renderMonitors() {
 $("display-strategy").innerHTML = displayed.strategies
   .map((s) => '<option value="' + s.id + '">' + esc(s.name) + "</option>")
   .join("");
-$("display-strategy").onchange = renderMonitors;
+$("display-strategy").onchange = () => {
+  select(displayStrategy());
+  renderMonitors();
+};
 $("show-details").onclick = () =>
   openStrategyWindow(displayStrategy(), "strategy");
 $("show-prices").onclick = $("monitor-price-open").onclick = () =>
@@ -893,10 +971,233 @@ $("show-workstation").onclick = () =>
 $("toggle-monitors").onclick = () => {
   const hidden = !$("monitor-dock").hidden;
   $("monitor-dock").hidden = hidden;
+  workspace.monitors = !hidden;
+  saveWorkspace();
   $("toggle-monitors").textContent = hidden ? "Show monitors" : "Hide monitors";
   $("toggle-monitors").setAttribute("aria-pressed", String(!hidden));
 };
 
+function renderProvenance() {
+  const age =
+    mode === "live"
+      ? lastReceived
+        ? Math.max(0, (performance.now() - lastReceived) / 1000).toFixed(1) +
+          "s since receipt"
+        : "waiting for stream"
+      : "Recorded session time";
+  $("provenance").textContent =
+    (HOSTED_PREVIEW
+      ? "PRIVATE PREVIEW / browser demo & imports"
+      : "LOCAL OBSERVER") +
+    " · " +
+    (displayed.source || "imported").toUpperCase() +
+    " · " +
+    mode.toUpperCase() +
+    " · FRAME " +
+    displayed.seq +
+    " · " +
+    displayed.time.toFixed(3) +
+    "s · " +
+    age +
+    " · DROPS " +
+    (displayed.dropped ?? "not supplied");
+}
+function renderStrategyTree() {
+  const query = $("strategy-search").value.toLowerCase();
+  $("strategies").innerHTML = exchangeTotals(displayed.strategies)
+    .filter((e) => e.strategies.length)
+    .map(
+      (e) =>
+        '<div class="venue-heading">' +
+        e.id +
+        " <span>" +
+        money(e.pnl) +
+        "</span></div>" +
+        e.strategies
+          .filter((s) =>
+            (s.id + " " + s.name + " " + s.symbol)
+              .toLowerCase()
+              .includes(query),
+          )
+          .map(
+            (s) =>
+              '<button class="row ' +
+              (s.id === selected ? "selected" : "") +
+              '" data-id="' +
+              s.id +
+              '"><span>' +
+              esc(s.name) +
+              "<small>" +
+              esc(s.symbol) +
+              " · " +
+              esc(healthMap()[s.id].state) +
+              '</small></span><b class="' +
+              (s.pnl < 0 ? "negative" : "positive") +
+              '">' +
+              money(s.pnl) +
+              "</b></button>",
+          )
+          .join(""),
+    )
+    .join("");
+}
+function renderOperations() {
+  const rows = operationRows(displayed, log, workspace.tab);
+  $("operation-count").textContent = rows.length + " records";
+  for (const b of $("operation-tabs").querySelectorAll("[data-tab]")) {
+    b.setAttribute("aria-selected", String(b.dataset.tab === workspace.tab));
+    b.classList.toggle("active", b.dataset.tab === workspace.tab);
+  }
+  const columns =
+    workspace.tab === "positions"
+      ? [
+          "Strategy",
+          "Exchange",
+          "Instrument",
+          "State",
+          "Position",
+          "P&L (USD)",
+          "Orders",
+          "Fills",
+          "Latency (ns)",
+        ]
+      : workspace.tab === "exceptions"
+        ? ["Time (session s)", "Severity", "Type", "Entity", "Detail"]
+        : [
+            "Time (session s)",
+            "Order ID",
+            "Strategy",
+            "Exchange",
+            "Side",
+            "Quantity",
+            "Price",
+            "Stage",
+          ];
+  $("operation-table").innerHTML =
+    "<table><thead><tr>" +
+    columns.map((c) => "<th>" + c + "</th>").join("") +
+    "</tr></thead><tbody>" +
+    rows
+      .slice(0, 100)
+      .map((r) => {
+        let cells;
+        if (workspace.tab === "positions")
+          cells = [
+            r.strategy,
+            r.venue,
+            r.instrument,
+            r.state,
+            r.position,
+            money(r.pnl),
+            r.orders,
+            r.fills,
+            r.latency,
+          ];
+        else if (workspace.tab === "exceptions")
+          cells = [
+            r.time.toFixed(6),
+            r.severity,
+            r.type,
+            r.strategyId || r.feed,
+            r.message || eventText(r),
+          ];
+        else
+          cells = [
+            r.time.toFixed(6),
+            r.orderId,
+            r.strategyId,
+            exchangeOf(
+              displayed.strategies.find((s) => s.id === r.strategyId) || {},
+            ),
+            r.side,
+            r.qty,
+            r.price,
+            r.type,
+          ];
+        return (
+          "<tr " +
+          (r.orderId
+            ? 'data-order="' + esc(r.orderId) + '" tabindex="0"'
+            : 'data-entity="' +
+              esc(r.strategy || r.strategyId || r.feed) +
+              '"') +
+          ">" +
+          cells.map((c) => "<td>" + esc(c ?? "—") + "</td>").join("") +
+          "</tr>"
+        );
+      })
+      .join("") +
+    "</tbody></table>" +
+    (rows.length
+      ? ""
+      : '<p class="empty-state">No observed ' +
+        workspace.tab +
+        " in the loaded window.</p>");
+}
+function applyTheme() {
+  document.body.classList.toggle(
+    "professional",
+    workspace.theme === "professional",
+  );
+  document.body.classList.toggle("showcase", workspace.theme === "showcase");
+  document.body.classList.toggle("cinematic", workspace.theme === "showcase");
+  city.professional(workspace.theme === "professional");
+  city.cameraFocus(workspace.autoFocus);
+  city.bridgeScale(workspace.scale);
+  $("theme").value = workspace.theme;
+  $("bridge-scale").value = workspace.scale;
+  $("camera-focus").checked = workspace.autoFocus;
+  $("monitor-dock").hidden = !workspace.monitors;
+  $("toggle-monitors").textContent = workspace.monitors
+    ? "Hide monitors"
+    : "Show monitors";
+  $("cinematic").textContent =
+    workspace.theme === "professional" ? "Table view" : "Engineering";
+  saveWorkspace();
+  window.dispatchEvent(new Event("resize"));
+}
+$("theme").onchange = (e) => {
+  workspace.theme = e.target.value;
+  applyTheme();
+};
+$("bridge-scale").onchange = (e) => {
+  workspace.scale = e.target.value;
+  city.bridgeScale(workspace.scale);
+  saveWorkspace();
+  draw(displayed);
+};
+$("camera-focus").onchange = (e) => {
+  workspace.autoFocus = e.target.checked;
+  city.cameraFocus(workspace.autoFocus);
+  saveWorkspace();
+};
+$("inspector").addEventListener("click", (e) => {
+  const p = e.target.closest("[data-inspector-pnl]"),
+    d = e.target.closest("[data-inspector-detail]");
+  if (p) openPnlWindow(p.dataset.inspectorPnl);
+  else if (d) openStrategyWindow(d.dataset.inspectorDetail, "strategy");
+});
+$("strategy-search").oninput = renderStrategyTree;
+$("operation-tabs").onclick = (e) => {
+  const b = e.target.closest("[data-tab]");
+  if (b) {
+    workspace.tab = b.dataset.tab;
+    saveWorkspace();
+    renderOperations();
+  }
+};
+$("operation-table").onclick = (e) => {
+  const order = e.target.closest("[data-order]"),
+    entity = e.target.closest("[data-entity]");
+  if (order) followOrder(order.dataset.order);
+  else if (entity) select(entity.dataset.entity);
+};
+if (HOSTED_PREVIEW)
+  for (const id of ["sessions", "refresh", "recording", "connect"]) {
+    $(id).disabled = true;
+    $(id).title = "Live backend is available in the downloadable local project";
+  }
+applyTheme();
 function renderTicker(frame) {
   $("ticker-label").textContent =
     (frame.source || "imported").toUpperCase() + " / ACTIVITY";
@@ -1115,6 +1416,15 @@ $("strategies").onclick = $("feeds").onclick = (e) => {
 };
 $("home").onclick = () => city.home();
 function cinema() {
+  if (workspace.theme === "professional") {
+    document.body.classList.toggle("data-expanded");
+    $("cinematic").textContent = document.body.classList.contains(
+      "data-expanded",
+    )
+      ? "3D workspace"
+      : "Table view";
+    return;
+  }
   document.body.classList.toggle("cinematic");
   city.cinematic(document.body.classList.contains("cinematic"));
   $("cinematic").textContent = document.body.classList.contains("cinematic")
@@ -1130,7 +1440,11 @@ $("tour").onclick = () => {
   $("tour").textContent = touring ? "Stop tour" : "Camera tour";
 };
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Tab" && e.target === document.body) {
+  if (
+    workspace.theme === "showcase" &&
+    e.key === "Tab" &&
+    e.target === document.body
+  ) {
     e.preventDefault();
     cinema();
   }
@@ -1214,9 +1528,11 @@ $("import").onchange = async (e) => {
 };
 let tickerOffset = 0,
   tickerPaused = false,
-  manualTickerPaused = false;
+  manualTickerPaused = workspace.tickerPaused;
 $("ticker-pause").onclick = () => {
   manualTickerPaused = !manualTickerPaused;
+  workspace.tickerPaused = manualTickerPaused;
+  saveWorkspace();
   $("ticker-pause").setAttribute("aria-pressed", String(manualTickerPaused));
   $("ticker-pause").textContent = manualTickerPaused
     ? "▶ Run ticker"
@@ -1269,11 +1585,12 @@ function tick(now) {
 }
 loadLocal(local);
 seek(30);
-openStrategyWindow("mm", "strategy");
+if (workspace.theme === "showcase") openStrategyWindow("mm", "strategy");
 refresh();
 setInterval(refresh, 15000);
 setInterval(() => {
   refreshHealth();
+  renderProvenance();
   inspect();
 }, 1000);
 setInterval(() => {

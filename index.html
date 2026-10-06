@@ -3,9 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Market Nexus v7 — Exchange Cities & Strategy Bridges</title>
+    <title>Market Nexus — Operations Workstation</title>
   </head>
-  <body class="cinematic">
+  <body class="professional">
     <div id="world"></div>
     <div id="detail-windows"></div>
     <div id="historical-strip" aria-label="Historical snapshots"></div>
@@ -13,9 +13,9 @@
       <b id="ticker-label">LIVE ACTIVITY</b>
       <div id="ticker-viewport">
         <div id="ticker-track">
-          <div>MARKET NEXUS v7 · Loading source activity…</div>
+          <div>MARKET NEXUS v8 · Loading source activity…</div>
           <div aria-hidden="true">
-            MARKET NEXUS v7 · Loading source activity…
+            MARKET NEXUS v8 · Loading source activity…
           </div>
         </div>
       </div>
@@ -23,15 +23,29 @@
     </div>
     <header>
       <div>
-        <small>READ-ONLY TRADING OBSERVABILITY</small>
-        <h1>MARKET <span>NEXUS</span> <b id="build-version">v7.0.0</b></h1>
+        <small>TRADING OPERATIONS / READ-ONLY</small>
+        <h1>MARKET <span>NEXUS</span> <b id="build-version">v8.0.0</b></h1>
       </div>
       <div id="connection" role="status">LOCAL SIMULATION</div>
-      <button id="cinematic">Engineering</button
+      <label class="theme-control"
+        >Theme
+        <select id="theme">
+          <option value="professional">Professional</option>
+          <option value="showcase">Showcase</option>
+        </select></label
+      ><button id="cinematic">Expand data</button
       ><button id="home">Reset camera</button
       ><button id="tour" aria-pressed="false">Camera tour</button>
     </header>
     <nav id="feature-controls" aria-label="City displays">
+      <label
+        >Bridge scale
+        <select id="bridge-scale">
+          <option value="shared">Shared USD scale</option>
+          <option value="individual">Individual USD scale</option>
+        </select></label
+      >
+      <label><input id="camera-focus" type="checkbox" /> Auto-focus</label>
       <label
         >City
         <select id="city-navigation" aria-label="Exchange city"></select
@@ -44,7 +58,7 @@
       <button id="show-prices">Price chart</button>
       <button id="show-signals">Signal scanner</button>
       <button id="show-pnl">Strategy bridge</button>
-      <button id="show-workstation">Robot workstation</button>
+      <button id="show-workstation">Strategy workspace</button>
       <button id="toggle-monitors" aria-pressed="true">Hide monitors</button>
     </nav>
     <section
@@ -68,6 +82,7 @@
       <div id="visible-signal"></div>
       <button id="monitor-signal-open">Open scanner ↗</button>
     </section>
+    <div id="provenance" role="status"></div>
     <section id="metrics"></section>
     <div id="health-status" role="status"></div>
     <section id="order-panel" class="panel" hidden>
@@ -80,7 +95,13 @@
       <span id="scene-source">LOCAL DEMO</span>
     </div>
     <aside id="left" class="panel">
-      <h2>Strategy skyline</h2>
+      <h2>Exchanges / strategies</h2>
+      <input
+        id="strategy-search"
+        type="search"
+        placeholder="Search strategy or instrument"
+        aria-label="Search strategy or instrument"
+      />
       <div id="strategies"></div>
       <h2>P&amp;L — loaded window</h2>
       <canvas
@@ -96,8 +117,8 @@
       <div id="feeds"></div>
       <h2>Visual legend</h2>
       <p class="muted">
-        Cyan: healthy · Amber: degraded<br />Magenta: negative P&L · Pulses:
-        fills<br />Tower height: absolute P&L magnitude
+        Blue: healthy · Amber: degraded<br />Red: critical health · Chart
+        colour: P&L direction<br />Professional towers: stable height
       </p>
     </aside>
     <aside id="right" class="panel">
@@ -106,6 +127,21 @@
       <h2>Event stream</h2>
       <div id="events"></div>
     </aside>
+    <section
+      id="operations"
+      class="panel"
+      aria-label="Trading operations tables"
+    >
+      <div id="operation-tabs" role="tablist">
+        <button data-tab="orders" role="tab">Orders</button
+        ><button data-tab="fills" role="tab">Fills</button
+        ><button data-tab="positions" role="tab">Positions</button
+        ><button data-tab="exceptions" role="tab">Exceptions</button
+        ><span id="operation-count"></span
+        ><small>Loaded observation window</small>
+      </div>
+      <div id="operation-table"></div>
+    </section>
     <footer class="panel">
       <div class="toolbar">
         <button id="play">Pause</button
